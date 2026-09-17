@@ -11,7 +11,8 @@ use DateTimeZone;
  * Runs a sustainable web analysis for one URL.
  *
  * Phase 1 (parallel): page HTML + green hosting check.
- * Phase 2 (parallel): all sub-resources + country lookups of their hosts.
+ * Phase 2 (parallel): HEAD requests for all sub-resources + country lookups of their hosts.
+ * Phase 3 (parallel): full downloads of the sub-resources whose HEAD response had no usable Content-Length.
  */
 final class Analyzer
 {
@@ -26,6 +27,7 @@ final class Analyzer
         private readonly int $maxResources,
         private readonly int $maxHtmlBytes,
         private readonly string $timezone,
+        private readonly bool $headRequests = true,
     ) {
     }
 
@@ -56,6 +58,7 @@ final class Analyzer
             maxResources: (int) $config->get('max_resources'),
             maxHtmlBytes: (int) $config->get('max_html_bytes'),
             timezone: (string) $config->get('timezone'),
+            headRequests: (bool) $config->get('head_requests'),
         );
     }
 
@@ -104,22 +107,43 @@ final class Analyzer
             }
         }
 
+        // Sizes are taken from the Content-Length of HEAD responses; downloads are only the fallback.
         $batch = $this->geoLocator->requests(array_values($ips));
         foreach ($resources as $index => $resource) {
-            $batch['resource:' . $index] = new HttpRequest($resource);
+            $batch['resource:' . $index] = $this->headRequests ? HttpRequest::head($resource) : new HttpRequest($resource);
         }
         $results = $this->http->fetchAll($batch, $deadline);
+
+        $sizes = [];
+        $downloads = [];
+        foreach ($resources as $index => $resource) {
+            $result = $results['resource:' . $index];
+
+            if (!$this->headRequests) {
+                $sizes[$index] = $result->ok() ? $result->bytes : null;
+            } elseif ($result->ok() && $result->status >= 200 && $result->status < 300 && $result->contentLength > 0) {
+                $sizes[$index] = $result->contentLength;
+            } else {
+                // No Content-Length (e.g. chunked), HEAD not supported, or an error: measure the real download.
+                $downloads['resource:' . $index] = new HttpRequest($resource);
+            }
+        }
+
+        foreach ($this->http->fetchAll($downloads, $deadline) as $id => $result) {
+            $sizes[(int) substr($id, strlen('resource:'))] = $result->ok() ? $result->bytes : null;
+        }
+
+        $downloaded = $this->headRequests ? count($downloads) : count($resources);
 
         $requests = [$url => $page->bytes];
         $extensions = [];
         $skipped = 0;
         foreach ($resources as $index => $resource) {
-            $result = $results['resource:' . $index];
-            if (!$result->ok()) {
+            if ($sizes[$index] === null) {
                 $skipped++;
                 continue;
             }
-            $requests[$resource] = $result->bytes;
+            $requests[$resource] = $sizes[$index];
             $extensions[] = Url::extension($resource);
         }
 
@@ -141,6 +165,7 @@ final class Analyzer
                 'final_url' => $page->url,
                 'duration_ms' => (int) round($elapsed * 1000),
                 'skipped' => $skipped,
+                'sizes' => ['content_length' => count($resources) - $downloaded, 'download' => $downloaded],
                 'truncated' => count($candidates) > count($resources) || microtime(true) >= $deadline,
                 'cached' => false,
                 'version' => Config::VERSION,

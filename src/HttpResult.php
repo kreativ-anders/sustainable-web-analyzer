@@ -11,6 +11,7 @@ final class HttpResult
      * @param int $status HTTP status of the final response (0 if none was received).
      * @param int $bytes Body bytes as transferred (no Accept-Encoding is sent, so usually uncompressed).
      * @param bool $setsCookie Whether any response in the redirect chain sent Set-Cookie.
+     * @param ?int $contentLength Content-Length header of the final response, if sent.
      */
     public function __construct(
         public readonly string $url,
@@ -19,6 +20,7 @@ final class HttpResult
         public readonly string $body,
         public readonly bool $setsCookie,
         public readonly ?string $error,
+        public readonly ?int $contentLength = null,
     ) {
     }
 

@@ -44,6 +44,7 @@ final class Config
         'max_resource_bytes' => 50_000_000,   // transfers are aborted beyond this size
         'user_agent' => 'SustainableWebAnalyzer/1.0 (+https://kreativ-anders.de/web-analyse)',
         'verify_tls' => true,
+        'head_requests' => true,       // read sizes from HEAD Content-Length, download only as fallback
 
         // External services
         'green_check_url' => 'https://api.thegreenwebfoundation.org/api/v3/greencheck/',

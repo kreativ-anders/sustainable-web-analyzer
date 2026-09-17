@@ -17,6 +17,7 @@ final class Transfer
     public int $bytes = 0;
     public string $body = '';
     public ?string $location = null;
+    public ?int $contentLength = null;
     public bool $setsCookie = false;
     public bool $tooLarge = false;
     public ?string $error = null;
@@ -34,6 +35,7 @@ final class Transfer
         $this->bytes = 0;
         $this->body = '';
         $this->location = null;
+        $this->contentLength = null;
         $this->tooLarge = false;
     }
 
@@ -46,6 +48,6 @@ final class Transfer
 
     public function result(): HttpResult
     {
-        return new HttpResult($this->url, $this->status, $this->bytes, $this->body, $this->setsCookie, $this->error);
+        return new HttpResult($this->url, $this->status, $this->bytes, $this->body, $this->setsCookie, $this->error, $this->contentLength);
     }
 }

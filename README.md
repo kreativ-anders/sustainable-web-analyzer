@@ -5,9 +5,9 @@ A standalone PHP endpoint that measures how sustainable a web page is. It gives 
 It replaces the `web-analyse` Kirby plugin of [kreativ-anders.de](https://kreativ-anders.de/web-analyse) and returns the same JSON, plus a few additional fields.
 
 - Vanilla PHP 8.2+, no Composer packages, only the `curl` and `dom` extensions
-- Parallel crawling with `curl_multi` (all sub-resources at once instead of one after another)
+- Parallel crawling with `curl_multi`; resource sizes come from `HEAD` requests (`Content-Length`), and a full download is only the fallback
 - SSRF protection, rate limiting, CORS allowlist, results cached for a week
-- CO2 calculation ported 1:1 from [CO2.js](https://github.com/thegreenwebfoundation/co2.js) 0.13.2 (Sustainable Web Design model v3), verified against the JavaScript library
+- CO2 calculation ported 1:1 from [CO2.js](https://github.com/thegreenwebfoundation/co2.js) 0.19.0 (Sustainable Web Design Model v4, the library's default), verified against the JavaScript library
 
 ## Quick start
 
@@ -37,6 +37,7 @@ The URL may omit the scheme. `http://` is upgraded to `https://`. Only port 443 
     "final_url": "https://kreativ-anders.de/",
     "duration_ms": 368,
     "skipped": 0,
+    "sizes": { "content_length": 11, "download": 0 },
     "truncated": false,
     "cached": false,
     "version": "1.0.0"
@@ -53,10 +54,12 @@ The URL may omit the scheme. `http://` is upgraded to `https://`. Only port 443 
   "divification": false,
   "co2": {
     "model": "swd",
-    "model_version": 3,
-    "co2js_version": "0.13.2",
-    "per_visit": 0.05098032317628,
-    "per_byte": 0.067523606856,
+    "model_version": 4,
+    "co2js_version": "0.19.0",
+    "per_visit": 0.02632922929,
+    "per_byte": 0.02632922929,
+    "segments": { "operational": 0.014937807638, "embodied": 0.011391421652 },
+    "rating": "A+",
     "unit": "g"
   }
 }
@@ -65,18 +68,21 @@ The URL may omit the scheme. `http://` is upgraded to `https://`. Only port 443 
 | Field | Meaning |
 |---|---|
 | `requests` | URL → bytes of the page and every `script[src]`, `link[href]` and `img[src]` (links with a non-downloading `rel` such as `preconnect` or `icon` are ignored) |
-| `bytes` | Sum of `requests`. Sizes are uncompressed: no `Accept-Encoding` is sent |
+| `bytes` | Sum of `requests`. Sizes are uncompressed: no `Accept-Encoding` is sent. The page itself is always downloaded; sub-resources use the `Content-Length` of a `HEAD` response |
 | `types` | File extension → count, for sub-resources (`""` = no extension) |
 | `hosts` | Host → ISO country code of the server (ipinfo.io), or `null` if unknown |
 | `green` | Hosted with renewable energy according to The Green Web Foundation |
 | `cookies` | The page sets cookies, or loads a known consent manager |
 | `divification` | More than one `<div>` is nested at least four levels deep |
-| `co2.per_visit` | Grams of CO2e per visit, same as `new co2({model: "swd"}).perVisit(bytes, green)` |
-| `co2.per_byte` | Grams of CO2e for one uncached transfer, same as `perByte(bytes, green)` |
+| `co2.per_visit` | Grams of CO2e per visit, same as `new co2({model: "swd", version: 4}).perVisit(bytes, green)` |
+| `co2.per_byte` | Grams of CO2e for transferring `bytes`, same as `perByte(bytes, green)`. It can differ from `per_visit` in the last floating-point digits, as in CO2.js |
+| `co2.segments` | `per_visit` split into `operational` (electricity) and `embodied` (manufacturing of data centers, networks and devices). The embodied part is a fixed per-GB average in SWDM v4, not the site's real hardware. Green hosting is applied to the operational part, so both always add up to `per_visit` |
+| `co2.rating` | SWDM v4 grade `A+`…`F` of `per_visit`, same as CO2.js `rating: true` (`null` for 0 bytes) |
 | `meta.time` | Analysis duration in whole seconds (the field the plugin had) |
 | `meta.duration_ms` | Analysis duration in milliseconds |
 | `meta.final_url` | Page URL after redirects |
 | `meta.skipped` | Resources that could not be fetched (unreachable, blocked, time limit) |
+| `meta.sizes` | How sub-resource sizes were measured: `content_length` (HEAD) or `download` (fallback, or `head_requests => false`) |
 | `meta.truncated` | `max_resources` or `max_execution_time` was hit |
 | `meta.cached` | Response was served from the result cache |
 
@@ -108,7 +114,7 @@ function createFetchURL(url) {
 ```
 
 - The `X-Requested-With` header is no longer needed. Removing it saves a CORS preflight request, but it is still accepted.
-- The CO2 value can be read from `result.co2.per_visit` instead of loading CO2.js from unpkg: `printCO2Result(result.co2.per_visit.toFixed(3))`.
+- The CO2 value can be read from `result.co2.per_visit` instead of loading CO2.js 0.13.2 from unpkg: `printCO2Result(result.co2.per_visit.toFixed(3))`. SWDM v4 gives roughly 45 % lower values than v3, so the thresholds of the opinion text in `printCO2Result()` should be revisited, or replaced by `result.co2.rating`.
 - `hosts` can now contain `null` for hosts whose country is unknown, so `printHostResults()` should handle it.
 - Afterwards `site/plugins/web-analyse` (templates `web-analyse.json.php`, the route and the helper functions) and `site/plugins/ipinfo` can be removed. The HTML template, form and PNG template belong to the website and must be moved to `site/templates` / `site/snippets` if the page should stay.
 
@@ -128,6 +134,7 @@ Settings are resolved in this order: defaults in [`src/Config.php`](src/Config.p
 | `max_execution_time` | 20 s | Hard limit for one analysis |
 | `max_resources` | 150 | Sub-resources per page |
 | `concurrency` | 10 | Parallel transfers |
+| `head_requests` | `true` | Measure sub-resources via `HEAD` `Content-Length`; `false` downloads everything |
 | `enabled` / `debug` | `true` / `false` | Maintenance mode / show error details (`SWA_ENABLED`, `SWA_DEBUG`) |
 
 ## Deployment
@@ -161,8 +168,9 @@ Use PHP-FPM (not `php -S`) in production. The response is sent with `fastcgi_fin
 1. **Validate:** normalize the URL, return the cached result if one exists, otherwise count the request against the rate limit and take a per-URL lock. Simultaneous requests for the same URL wait for the first analysis instead of repeating it.
 2. **Phase 1, in parallel:** fetch the page HTML and query the Green Web Foundation.
 3. **Parse:** extract resources with DOMDocument (`<base href>` and relative paths are resolved per RFC 3986) and detect div-ification and consent managers.
-4. **Phase 2, in parallel:** fetch all sub-resources and look up the country of every host IP (ipinfo.io, cached per IP). Bodies of sub-resources are streamed and only counted, never buffered.
-5. **Finish:** calculate CO2, cache the result for a week (errors are never cached) and respond.
+4. **Phase 2, in parallel:** send a `HEAD` request to every sub-resource and look up the country of every host IP (ipinfo.io, cached per IP).
+5. **Phase 3, in parallel:** download only the sub-resources whose `HEAD` response was unusable (no or zero `Content-Length`, e.g. chunked transfer; a non-2xx status; `HEAD` not supported; an error). Bodies are streamed and only counted, never buffered. On zeit.de, spiegel.de, github.com and wikipedia.org this avoided 94–100 % of the downloads, and the totals matched a full download to within a few bytes.
+6. **Finish:** calculate CO2, cache the result for a week (errors are never cached) and respond.
 
 ### Security
 
@@ -183,4 +191,6 @@ Use PHP-FPM (not `php -S`) in production. The response is sent with `fastcgi_fin
 - **Consent managers:** more are detected (Cookiebot, OneTrust, consentmanager, Complianz, CookieYes, iubenda, …).
 - **Cache key:** now includes the query string (`?page_id=2` is a different page).
 - **Status codes:** errors use proper HTTP status codes; the plugin always returned 200.
+- **Downloads:** sub-resources are measured with `HEAD` requests instead of being downloaded.
+- **CO2:** calculated on the server with SWDM v4 (CO2.js 0.19.0). The website used SWDM v3 (CO2.js 0.13.2) in the browser.
 - **Server countries:** CDN-hosted sites may report different countries than before, because anycast/GeoDNS answers depend on where the analyzer runs.

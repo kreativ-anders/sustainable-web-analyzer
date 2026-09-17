@@ -109,7 +109,6 @@ final class HttpClient
 
         $options = [
             CURLOPT_URL => $transfer->url,
-            CURLOPT_HTTPGET => true,
             CURLOPT_HTTPHEADER => $transfer->request->headers,
             CURLOPT_USERAGENT => $this->userAgent,
             CURLOPT_FOLLOWLOCATION => false,
@@ -125,12 +124,15 @@ final class HttpClient
                 if (preg_match('~^HTTP/\S+\s+(\d{3})~', $line, $match)) {
                     $transfer->status = (int) $match[1];
                     $transfer->location = null;
+                    $transfer->contentLength = null;
                 } elseif (($colon = strpos($line, ':')) !== false) {
                     $name = strtolower(trim(substr($line, 0, $colon)));
                     if ($name === 'set-cookie') {
                         $transfer->setsCookie = true;
                     } elseif ($name === 'location') {
                         $transfer->location = trim(substr($line, $colon + 1));
+                    } elseif ($name === 'content-length' && ctype_digit($value = trim(substr($line, $colon + 1)))) {
+                        $transfer->contentLength = (int) $value;
                     }
                 }
 
@@ -154,6 +156,12 @@ final class HttpClient
                 return $length;
             },
         ];
+
+        if ($transfer->request->method === 'HEAD') {
+            $options[CURLOPT_NOBODY] = true;
+        } else {
+            $options[CURLOPT_HTTPGET] = true;
+        }
 
         if (defined('CURLOPT_PROTOCOLS_STR')) {
             $options[CURLOPT_PROTOCOLS_STR] = 'https';

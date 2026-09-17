@@ -163,16 +163,24 @@ check('inspect: no consent manager', false, $report['consentManager']);
 check('inspect: empty document', ['resources' => [], 'divification' => false, 'consentManager' => false], HtmlInspector::inspect('', 'https://example.com/'));
 
 // ---------------------------------------------------------------------------------------------
-// Co2 – reference values produced by @tgwf/co2@0.13.2: new co2({model: "swd"}).perVisit()/perByte()
+// Co2 – reference values from @tgwf/co2@0.19.0, new co2({model: "swd", version: 4}): [bytes, green, perVisit, perByte, rating]
 // ---------------------------------------------------------------------------------------------
 
-$reference = json_decode('[[0,false,0,0],[0,true,0,0],[1,false,2.703051e-7,3.5802e-7],[1,true,2.3434596e-7,3.10392e-7],[1000,false,0.00027030509999999996,0.00035802],[1000,true,0.00023434595999999997,0.00031039200000000005],[123456,false,0.033370786425600006,0.04419971712000001],[123456,true,0.02893141483776001,0.03831975475200001],[1000000,false,0.2703051000000001,0.35802000000000006],[1000000,true,0.23434596000000005,0.31039200000000006],[2200000,false,0.5946712200000001,0.7876440000000001],[2200000,true,0.5155611120000001,0.6828624000000001],[7654321,false,2.0690020033370997,2.74040000442],[7654321,true,1.7937592028931597,2.3758400038320002],[1000000000,false,270.3051,358.02],[1000000000,true,234.34596000000002,310.392]]', true);
+$reference = json_decode('[[0,false,0,0,null],[0,true,0,0,null],[0.5,false,0,0,null],[0.5,true,0,0,null],[1,false,1.4820000000000002e-7,1.4820000000000002e-7,"A+"],[1,true,1.2103000000000002e-7,1.2103000000000002e-7,"A+"],[1000,false,0.0001482,0.0001482,"A+"],[1000,true,0.00012103,0.00012103,"A+"],[123456,false,0.018296179200000002,0.018296179200000002,"A+"],[123456,true,0.014941879680000002,0.014941879680000002,"A+"],[217543,false,0.032239872600000004,0.0322398726,"A+"],[217543,true,0.02632922929,0.02632922929,"A+"],[1000000,false,0.1482,0.1482,"C"],[1000000,true,0.12103,0.12103,"B"],[2200000,false,0.32604000000000005,0.32604,"E"],[2200000,true,0.266266,0.266266,"D"],[7654321,false,1.1343703722000003,1.1343703722000003,"F"],[7654321,true,0.9264024706300001,0.92640247063,"F"],[15857754,false,2.3501191428000006,2.3501191428000006,"F"],[15857754,true,1.9192639666200002,1.9192639666200002,"F"],[1000000000,false,148.20000000000002,148.2,"F"],[1000000000,true,121.03,121.03,"F"]]', true);
 
-foreach ($reference as [$bytes, $green, $perVisit, $perByte]) {
+foreach ($reference as [$bytes, $green, $perVisit, $perByte, $rating]) {
     $label = $bytes . ($green ? ' green' : '');
     check("Co2::perVisit({$label})", (float) $perVisit, Co2::perVisit($bytes, $green));
     check("Co2::perByte({$label})", (float) $perByte, Co2::perByte($bytes, $green));
+    check("Co2::report({$label}) rating", $rating, Co2::report((int) $bytes, $green)['rating']);
 }
+// CO2.js 0.19.0 results: "segment" → totalOperationalCO2e / totalEmbodiedCO2e (non-green only, see Co2::perVisitSegments)
+check('Co2::perVisitSegments operational', 0.7335595073560001, Co2::perVisitSegments(7654321)['operational']);
+check('Co2::perVisitSegments embodied', 0.4008108648440001, Co2::perVisitSegments(7654321)['embodied']);
+$segments = Co2::perVisitSegments(217543, true);
+check('Co2::perVisitSegments green adds up', true, abs($segments['operational'] + $segments['embodied'] - Co2::perVisit(217543, true)) < 1e-15);
+check('Co2::rating boundary', 'A+', Co2::rating(0.04));
+check('Co2::rating above boundary', 'A', Co2::rating(0.0400001));
 
 // ---------------------------------------------------------------------------------------------
 // Cache & RateLimiter
