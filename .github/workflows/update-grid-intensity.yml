@@ -1,0 +1,40 @@
+name: Update grid intensity
+
+on:
+  schedule:
+    - cron: '0 6 1 1,7 *' # 06:00 UTC on January 1 and July 1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: curl, dom, intl
+          coverage: none
+
+      - name: Regenerate data/grid-intensity.php
+        run: php bin/update-grid-intensity
+
+      - name: Run tests
+        run: php tests/run.php
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: Update grid intensity from Our World in Data
+          branch: update-grid-intensity
+          delete-branch: true
+          title: Update grid intensity from Our World in Data
+          body: |
+            Regenerated `data/grid-intensity.php` with `bin/update-grid-intensity` from [owid/energy-data](https://github.com/owid/energy-data) (latest year per country).
+
+            🤖 Generated with [Claude Code](https://claude.com/claude-code)

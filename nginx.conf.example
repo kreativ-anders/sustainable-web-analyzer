@@ -1,0 +1,77 @@
+# nginx + PHP-FPM server block for the Sustainable Web Analyzer.
+#
+# docs/ is the document root, so nginx can only ever serve the static documentation from disk:
+# config.php (ipinfo token), var/ (cache), src/, .git/ etc. are outside of it.
+# Only "/api/" is passed to PHP-FPM; "/" is the landing page and api.html, openapi.json, llms.txt etc.
+# are served from docs/.
+#
+# Copy to /etc/nginx/sites-available/, adjust server_name, the app path, certificates and the
+# fastcgi_pass socket, then: nginx -t && systemctl reload nginx
+
+# Every uncached analysis holds a PHP-FPM worker for up to max_execution_time. These limits keep a single
+# client from occupying the whole pool; the app's own rate limit (uncached analyses per IP) still applies.
+limit_req_zone $binary_remote_addr zone=swa_requests:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=swa_connections:10m;
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name swa.kreativ-anders.dev;
+
+    ssl_certificate     /etc/letsencrypt/live/swa.kreativ-anders.dev/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/swa.kreativ-anders.dev/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+
+    set $app /var/www/sustainable-web-analyzer;
+    root $app/docs;
+    index index.html;
+
+    server_tokens off;
+    access_log off; # client IPs are personal data; the app does its own rate limiting
+    client_max_body_size 1k; # the API only accepts GET
+
+    # Only valid if no location below uses add_header (otherwise repeat it there).
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # JSON responses compress well (fewer bytes on the wire).
+    gzip on;
+    gzip_types application/json text/css text/plain text/xml application/javascript;
+    gzip_min_length 512;
+
+    # "/api" is accepted as well: a redirect to "/api/" would break CORS preflight requests.
+    location ~ ^/api/?$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $app/index.php;
+        fastcgi_param DOCUMENT_ROOT $app;
+        fastcgi_param SCRIPT_NAME /api/;
+        fastcgi_param HTTP_PROXY ""; # httpoxy
+        fastcgi_hide_header X-Powered-By;
+        fastcgi_pass unix:/run/php/php8.5-fpm.sock;
+
+        limit_req zone=swa_requests burst=20 nodelay;
+        limit_conn swa_connections 4;
+        limit_req_status 429;
+        limit_conn_status 429;
+
+        # An analysis may take max_execution_time (20 s) plus network overhead.
+        fastcgi_read_timeout 45s;
+    }
+
+    # Landing page, API reference (api.html + openapi.json), llms.txt, robots.txt, sitemap.xml, og.png.
+    location / {
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
+        try_files $uri $uri/ =404;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name swa.kreativ-anders.dev;
+    return 301 https://$host$request_uri;
+}

@@ -12,6 +12,7 @@ final class HttpResult
      * @param int $bytes Body bytes as transferred (no Accept-Encoding is sent, so usually uncompressed).
      * @param bool $setsCookie Whether any response in the redirect chain sent Set-Cookie.
      * @param ?int $contentLength Content-Length header of the final response, if sent.
+     * @param ?Limit $limit The gate that stopped the transfer: with an error it was not measured, without one its bytes are a lower bound.
      */
     public function __construct(
         public readonly string $url,
@@ -21,6 +22,7 @@ final class HttpResult
         public readonly bool $setsCookie,
         public readonly ?string $error,
         public readonly ?int $contentLength = null,
+        public readonly ?Limit $limit = null,
     ) {
     }
 

@@ -15,6 +15,7 @@ use SustainableWebAnalyzer\Api;
 use SustainableWebAnalyzer\Cache;
 use SustainableWebAnalyzer\Co2;
 use SustainableWebAnalyzer\Config;
+use SustainableWebAnalyzer\GridIntensity;
 use SustainableWebAnalyzer\HtmlInspector;
 use SustainableWebAnalyzer\RateLimiter;
 use SustainableWebAnalyzer\Url;
@@ -111,6 +112,8 @@ foreach ([
     '169.254.169.254' => false, '100.64.0.1' => false, '0.0.0.0' => false, '255.255.255.255' => false,
     '::1' => false, 'fd00::1' => false, 'fe80::1' => false, '::ffff:127.0.0.1' => false, '::ffff:7f00:1' => false,
     '64:ff9b::a00:1' => false, '2002:a00:1::' => false,
+    '224.0.0.1' => false, '239.255.255.250' => false, '192.88.99.1' => false, 'ff02::1' => false,
+    'fec0::1' => false, 'feff::1' => false, '5f00::1' => false, '3fff:fff::1' => false, '3fff:1000::1' => true,
     '8.8.8.8' => true, '185.199.108.153' => true, '2a00:1450:4001:80b::200e' => true, '::ffff:8.8.8.8' => true,
 ] as $ip => $expected) {
     check("isPublicIp({$ip})", $expected, UrlGuard::isPublicIp((string) $ip));
@@ -181,6 +184,37 @@ $segments = Co2::perVisitSegments(217543, true);
 check('Co2::perVisitSegments green adds up', true, abs($segments['operational'] + $segments['embodied'] - Co2::perVisit(217543, true)) < 1e-15);
 check('Co2::rating boundary', 'A+', Co2::rating(0.04));
 check('Co2::rating above boundary', 'A', Co2::rating(0.0400001));
+
+// CO2.js 0.19.0 with a data-center grid intensity: perVisitTrace/perByteTrace(bytes, green, {gridIntensity: {dataCenter: intensity}})
+$reference = json_decode('[[217543,false,342,0.03042121312,0.03042121312],[217543,true,342,0.02632922929,0.02632922929],[7654321,false,31,0.9394530879350002,0.939453087935],[1000000,false,302.5,0.1376675,0.1376675],[2200000,false,0,0.266266,0.266266]]', true);
+
+foreach ($reference as [$bytes, $green, $intensity, $perVisit, $perByte]) {
+    $label = $bytes . ($green ? ' green' : '') . " @ {$intensity} g/kWh";
+    check("Co2::perVisit({$label})", (float) $perVisit, Co2::perVisit($bytes, $green, $intensity));
+    check("Co2::perByte({$label})", (float) $perByte, Co2::perByte($bytes, $green, $intensity));
+}
+$report = Co2::report(217543, false, 342.0);
+check('Co2::report grid intensity', ['data_center' => 342.0, 'network' => 494, 'device' => 494, 'source' => GridIntensity::SOURCE], $report['grid_intensity']);
+check('Co2::report segments add up', true, abs(array_sum($report['segments']) - $report['per_visit']) < 1e-15);
+check('Co2::report not penalized', [false, Co2::rating($report['per_visit'])], [$report['penalized'], $report['rating']]);
+$penalized = Co2::report(217543, false, 342.0, penalized: true);
+check('Co2::report penalized rating', [true, 'F'], [$penalized['penalized'], $penalized['rating']]);
+check('Co2::report penalized keeps the measured grams', $report['per_visit'], $penalized['per_visit']);
+check('Co2::report penalized without bytes', 'F', Co2::report(0, false, penalized: true)['rating']);
+
+// ---------------------------------------------------------------------------------------------
+// GridIntensity
+// ---------------------------------------------------------------------------------------------
+
+// The values come from generated data, so check plausibility and behavior instead of exact numbers
+$germany = GridIntensity::country('DE');
+check('grid: Germany is plausible', true, is_int($germany) && $germany > 0 && $germany < 1500);
+check('grid: data has countries', true, count(require dirname(__DIR__) . '/data/grid-intensity.php') > 150);
+check('grid: unknown country', null, GridIntensity::country('XX'));
+check('grid: no country', null, GridIntensity::country(null));
+check('grid: no bytes', 494.0, GridIntensity::dataCenter([]));
+check('grid: single country', (float) GridIntensity::country('FR'), GridIntensity::dataCenter(['FR' => 1000]));
+check('grid: byte-weighted', (3 * $germany + 494) / 4.0, GridIntensity::dataCenter(['DE' => 300, '' => 100]));
 
 // ---------------------------------------------------------------------------------------------
 // Cache & RateLimiter
@@ -267,7 +301,26 @@ $response = (new Api(Config::load($root, ['cache_dir' => $cacheDirectory, 'allow
 check('api: cache hit status', 200, $response->status);
 check('api: cache hit flag', true, $body($response)['meta']['cached']);
 check('api: cache hit keeps empty objects', true, str_contains($response->body, '"requests":{}'));
-check('api: cache hit is publicly cacheable', true, str_starts_with($response->headers['Cache-Control'], 'public'));
+check('api: cache hit is publicly cacheable', 'public, max-age=604800', $response->headers['Cache-Control']);
+
+$penalizedResult = ['meta' => ['url' => 'https://example.com/', 'cached' => false, 'limits' => ['time']], 'co2' => ['rating' => 'F', 'penalized' => true]];
+$cacheDirectory = temporaryDirectory();
+$api = new Api(
+    Config::load($root, ['cache_dir' => $cacheDirectory, 'allowed_origins' => ['https://kreativ-anders.de']]),
+    static fn () => new class ($penalizedResult) {
+        public function __construct(private array $result)
+        {
+        }
+
+        public function analyze(string $url): array
+        {
+            return $this->result;
+        }
+    },
+);
+check('api: penalized result max-age', 'public, max-age=259200', $api->handle($browser, ['url' => 'example.com'])->headers['Cache-Control']);
+check('api: penalized cache hit max-age', 'public, max-age=259200', $api->handle($browser, ['url' => 'example.com'])->headers['Cache-Control']);
+check('api: penalized result expires after 3 days', true, (int) file_get_contents(glob($cacheDirectory . '/*/*.cache')[0]) <= time() + 259200);
 
 // ---------------------------------------------------------------------------------------------
 // Live analysis (optional)
@@ -283,7 +336,27 @@ if (in_array('--network', $argv, true)) {
     check('live: at least one request', true, count($json['requests']) >= 1);
     check('live: bytes are the sum of requests', array_sum($json['requests']), $json['bytes']);
     check('live: every request host is listed', [], array_values(array_diff(array_unique(array_map(Url::host(...), array_keys($json['requests']))), array_keys($json['hosts']))));
-    check('live: co2 matches bytes', Co2::perVisit($json['bytes'], $json['green']), $json['co2']['per_visit']);
+    check('live: co2 matches bytes', true, abs(Co2::perVisit($json['bytes'], $json['green'], $json['co2']['grid_intensity']['data_center']) - $json['co2']['per_visit']) < 1e-6); // data_center is rounded
+    check('live: limits match penalty', $json['meta']['limits'] !== [], $json['co2']['penalized']);
+
+    // Gates: tiny limits must stop the analysis, be reported and rate the page F.
+    $gated = static function (array $overrides) use ($root, $target): array {
+        $config = Config::load($root, $overrides + ['cache_dir' => temporaryDirectory()]);
+        $result = Analyzer::fromConfig($config, new Cache((string) $config->get('cache_dir')))->analyze(UrlGuard::normalizeInput($target));
+
+        return json_decode(json_encode($result), true);
+    };
+    foreach ([
+        'resources' => ['max_resources' => 1],
+        'resource_bytes' => ['max_resource_bytes' => 1000],
+        'download_bytes' => ['head_requests' => false, 'max_download_bytes' => 1000],
+    ] as $limit => $overrides) {
+        $json = $gated($overrides);
+        check("live gate {$limit}: reported", true, in_array($limit, $json['meta']['limits'], true));
+        check("live gate {$limit}: truncated", true, $json['meta']['truncated']);
+        check("live gate {$limit}: rated F", ['F', true], [$json['co2']['rating'], $json['co2']['penalized']]);
+    }
+    check('live gate resource_bytes: capped', true, max($gated(['max_resource_bytes' => 1000])['requests']) <= 1000);
 }
 
 echo $failures === 0 ? "✓ {$assertions} assertions passed\n" : "\n{$failures} of {$assertions} assertions failed\n";

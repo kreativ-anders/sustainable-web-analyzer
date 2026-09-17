@@ -19,7 +19,7 @@ final class Transfer
     public ?string $location = null;
     public ?int $contentLength = null;
     public bool $setsCookie = false;
-    public bool $tooLarge = false;
+    public ?Limit $limit = null;
     public ?string $error = null;
 
     public function __construct(public readonly string $id, public readonly HttpRequest $request)
@@ -36,7 +36,7 @@ final class Transfer
         $this->body = '';
         $this->location = null;
         $this->contentLength = null;
-        $this->tooLarge = false;
+        $this->limit = null;
     }
 
     public function fail(string $error): HttpResult
@@ -48,6 +48,6 @@ final class Transfer
 
     public function result(): HttpResult
     {
-        return new HttpResult($this->url, $this->status, $this->bytes, $this->body, $this->setsCookie, $this->error, $this->contentLength);
+        return new HttpResult($this->url, $this->status, $this->bytes, $this->body, $this->setsCookie, $this->error, $this->contentLength, $this->limit);
     }
 }

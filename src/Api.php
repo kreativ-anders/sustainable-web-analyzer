@@ -47,7 +47,6 @@ final class Api
         if ($originAllowed) {
             $headers['Access-Control-Allow-Origin'] = $origin;
             $headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS';
-            $headers['Access-Control-Allow-Headers'] = 'X-Requested-With';
             $headers['Access-Control-Max-Age'] = '86400';
         }
 
@@ -95,7 +94,7 @@ final class Api
 
                 $analyzer = ($this->analyzerFactory)($this->config, $this->cache);
                 $json = json_encode($analyzer->analyze($url), self::JSON_FLAGS);
-                $this->cache->set($cacheKey, $json, (int) $this->config->get('cache_ttl'));
+                $this->cache->set($cacheKey, $json, $this->cacheTtl(json_decode($json, false, 512, JSON_THROW_ON_ERROR)));
 
                 return $this->success($json, false, $headers);
             } finally {
@@ -133,8 +132,8 @@ final class Api
 
     /**
      * Browsers send an Origin header on cross-origin fetches; same-origin GETs are recognised
-     * by Sec-Fetch-Site. Like the X-Requested-With check of the Kirby plugin this keeps casual
-     * direct use away – it is not a security boundary, the rate limiter is.
+     * by Sec-Fetch-Site. This keeps casual direct use away – it is not a security boundary,
+     * the rate limiter is.
      */
     private function isAllowedCaller(array $server, bool $originAllowed): bool
     {
@@ -181,15 +180,23 @@ final class Api
      */
     private function success(string $json, bool $cached, array $headers): Response
     {
+        $data = json_decode($json, false, 512, JSON_THROW_ON_ERROR);
         if ($cached) {
-            $data = json_decode($json, false, 512, JSON_THROW_ON_ERROR);
             $data->meta->cached = true;
             $json = json_encode($data, self::JSON_FLAGS);
         }
 
-        $headers['Cache-Control'] = 'public, max-age=' . (int) $this->config->get('cache_ttl');
+        $headers['Cache-Control'] = 'public, max-age=' . $this->cacheTtl($data);
 
         return new Response(200, $headers, $json);
+    }
+
+    /**
+     * Results that reached a gate are rated F; they expire sooner so a fixed page can be re-checked.
+     */
+    private function cacheTtl(object $data): int
+    {
+        return (int) $this->config->get(($data->co2->penalized ?? false) ? 'penalized_cache_ttl' : 'cache_ttl');
     }
 
     /**

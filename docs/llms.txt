@@ -1,0 +1,28 @@
+# Sustainable Web Analyzer
+
+> Open-source PHP endpoint that shows how sustainable a web page is: page weight, file types, semantic HTML, green hosting, server locations, cookies and CO2 per visit. Try it at https://kreativ-anders.de/web-analyse.
+
+The analyzer fetches a page and every script, stylesheet and image a first visit downloads. Sizes come from `HEAD` requests, with a download only as fallback. It checks green hosting, locates each host's country and weights that country's grid intensity by bytes. CO2 per visit follows the Sustainable Web Design Model v4 and is graded from A+ to F. Results are cached for a week.
+
+What it reports:
+
+- Weight: total bytes and bytes per request
+- File types: count of file extensions, e.g. WebP vs. JPG
+- HTML: `divification` is true when divs are nested too deeply instead of using semantic elements
+- Hosting: whether the page is hosted green
+- Location and distance: the country of every host
+- Cookies: whether the page sets cookies or loads a consent manager
+- CO2: grams per visit, per byte, operational and embodied segments, grade A+ to F
+
+## Docs
+
+- [Landing page](https://swa.kreativ-anders.dev/): what the tool analyzes and why
+- [API reference](https://swa.kreativ-anders.dev/api.html): interactive OpenAPI docs
+- [OpenAPI spec](https://swa.kreativ-anders.dev/openapi.json): request parameters and the full JSON response schema
+- [Endpoint](https://swa.kreativ-anders.dev/api/?url=kreativ-anders.de): `GET /api/?url=…` returns the analysis as JSON
+
+## Optional
+
+- [Live analysis](https://kreativ-anders.de/web-analyse): the tool in use on kreativ-anders.de
+- [Sustainable Web Design Model](https://sustainablewebdesign.org/estimating-digital-emissions/): the CO2 method
+- [Source code](https://github.com/kreativ-anders/sustainable-web-analyzer): vanilla PHP 8.2+, no dependencies

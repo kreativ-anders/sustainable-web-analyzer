@@ -15,6 +15,16 @@ final class UrlGuard
 {
     private const MAX_URL_LENGTH = 2048;
 
+    /** Not globally routable, but not rejected by FILTER_FLAG_GLOBAL_RANGE (PHP 8.2 – 8.5). */
+    private const NON_GLOBAL_RANGES = [
+        '224.0.0.0/4',     // IPv4 multicast
+        '192.88.99.0/24',  // deprecated 6to4 relay anycast
+        'ff00::/8',        // IPv6 multicast
+        'fec0::/10',       // deprecated site-local, still routed internally in some networks
+        '5f00::/16',       // SRv6 SIDs (RFC 9602)
+        '3fff::/20',       // documentation (RFC 9637)
+    ];
+
     /** @var array<string, string|AnalyzerException> host => IP or the failure */
     private array $resolved = [];
 
@@ -114,7 +124,39 @@ final class UrlGuard
             }
         }
 
-        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) !== false;
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) === false) {
+            return false;
+        }
+
+        foreach (self::NON_GLOBAL_RANGES as $range) {
+            if (self::inRange($ip, $range)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static function inRange(string $ip, string $cidr): bool
+    {
+        [$subnet, $bits] = explode('/', $cidr);
+        $address = (string) inet_pton($ip);
+        $network = (string) inet_pton($subnet);
+
+        if (strlen($address) !== strlen($network)) {
+            return false;
+        }
+
+        $bytes = intdiv((int) $bits, 8);
+        $remainder = (int) $bits % 8;
+
+        if (substr($address, 0, $bytes) !== substr($network, 0, $bytes)) {
+            return false;
+        }
+
+        $mask = (0xff << (8 - $remainder)) & 0xff;
+
+        return $remainder === 0 || (ord($address[$bytes]) & $mask) === (ord($network[$bytes]) & $mask);
     }
 
     private static function normalizeHost(string $host): ?string

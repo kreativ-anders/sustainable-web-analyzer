@@ -13,6 +13,7 @@ use RuntimeException;
  * - Redirects are followed manually so every hop passes the UrlGuard again.
  * - Bodies are streamed: only HttpRequest::$maxBodyBytes are kept, the rest is counted and discarded.
  * - Every transfer ends at the shared deadline at the latest.
+ * - Transfers stopped by a gate (time, redirects, size, byte budget) report it as HttpResult::$limit.
  */
 final class HttpClient
 {
@@ -31,9 +32,10 @@ final class HttpClient
     /**
      * @param array<string, HttpRequest> $requests
      * @param float $deadline Unix timestamp (microtime) after which no transfer may run.
+     * @param ?int $maxTotalBytes Body bytes all transfers of this call may download together (null = unlimited).
      * @return array<string, HttpResult> Same keys as $requests.
      */
-    public function fetchAll(array $requests, float $deadline): array
+    public function fetchAll(array $requests, float $deadline, ?int $maxTotalBytes = null): array
     {
         $queue = [];
         foreach ($requests as $id => $request) {
@@ -41,6 +43,7 @@ final class HttpClient
         }
 
         $results = [];
+        $budget = $maxTotalBytes; // shared by all write callbacks
         /** @var array<int, Transfer> $active keyed by spl_object_id of the cURL handle */
         $active = [];
         $multi = curl_multi_init();
@@ -53,7 +56,7 @@ final class HttpClient
                     $transfer = array_shift($queue);
 
                     try {
-                        $handle = $this->createHandle($transfer, $deadline);
+                        $handle = $this->createHandle($transfer, $deadline, $budget);
                     } catch (AnalyzerException $e) {
                         $results[$transfer->id] = $transfer->fail($e->detail !== '' ? $e->detail : $e->getMessage());
                         continue;
@@ -77,7 +80,7 @@ final class HttpClient
                     unset($active[spl_object_id($handle)]);
                     curl_multi_remove_handle($multi, $handle);
 
-                    if ($this->complete($transfer, $info['result'])) {
+                    if ($this->complete($transfer, $info['result'], $deadline)) {
                         $results[$transfer->id] = $transfer->result();
                     } else {
                         array_unshift($queue, $transfer); // follow redirect with priority
@@ -96,13 +99,19 @@ final class HttpClient
     }
 
     /**
-     * @throws AnalyzerException when the URL is rejected by the guard or the deadline has passed.
+     * @param ?int $budget Remaining body bytes of the fetchAll() call, decremented by the write callback.
+     * @throws AnalyzerException when the URL is rejected by the guard, or the deadline or byte budget is used up.
      */
-    private function createHandle(Transfer $transfer, float $deadline): CurlHandle
+    private function createHandle(Transfer $transfer, float $deadline, ?int &$budget): CurlHandle
     {
         $remainingMs = (int) (($deadline - microtime(true)) * 1000);
         if ($remainingMs <= 0) {
+            $transfer->limit = Limit::Time;
             throw AnalyzerException::unreachable('Time limit reached');
+        }
+        if ($budget !== null && $budget <= 0) {
+            $transfer->limit = Limit::DownloadBytes;
+            throw AnalyzerException::unreachable('Download limit reached');
         }
 
         $maxResponseBytes = $this->maxResponseBytes;
@@ -138,19 +147,28 @@ final class HttpClient
 
                 return strlen($line);
             },
-            CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use ($transfer, $maxResponseBytes): int {
+            CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use ($transfer, $maxResponseBytes, &$budget): int {
                 $length = strlen($chunk);
                 $transfer->bytes += $length;
+                if ($budget !== null) {
+                    $budget -= $length;
+                }
 
                 $room = $transfer->request->maxBodyBytes - strlen($transfer->body);
                 if ($room > 0) {
                     $transfer->body .= $length <= $room ? $chunk : substr($chunk, 0, $room);
                 }
 
+                // Abort; the bytes counted so far are still reported.
                 if ($transfer->bytes > $maxResponseBytes) {
-                    $transfer->tooLarge = true;
+                    $transfer->limit = Limit::ResourceBytes;
 
-                    return 0; // abort, the counted bytes are still reported
+                    return 0;
+                }
+                if ($budget !== null && $budget < 0) {
+                    $transfer->limit = Limit::DownloadBytes;
+
+                    return 0;
                 }
 
                 return $length;
@@ -169,8 +187,11 @@ final class HttpClient
             $options[CURLOPT_PROTOCOLS] = CURLPROTO_HTTPS;
         }
 
-        if ($transfer->request->guarded) {
+        // Redirects of unguarded requests (fixed API endpoints) are guarded too: their target is not ours to trust.
+        if ($transfer->request->guarded || $transfer->redirects > 0) {
             $options[CURLOPT_RESOLVE] = [$this->guard->pin($transfer->url)];
+        } elseif (($share = self::persistentShare()) !== null) {
+            $options[CURLOPT_SHARE] = $share;
         }
 
         $handle = curl_init();
@@ -182,11 +203,29 @@ final class HttpClient
     }
 
     /**
+     * PHP 8.5+: DNS, connections and TLS sessions of the fixed API endpoints (green check, ipinfo) outlive
+     * the request, so a PHP-FPM worker skips their TCP/TLS handshakes. User-controlled URLs never use it:
+     * they are pinned with CURLOPT_RESOLVE and must not share a DNS cache across requests.
+     */
+    private static function persistentShare(): ?object
+    {
+        if (!function_exists('curl_share_init_persistent')) {
+            return null;
+        }
+
+        return curl_share_init_persistent([CURL_LOCK_DATA_DNS, CURL_LOCK_DATA_CONNECT, CURL_LOCK_DATA_SSL_SESSION]);
+    }
+
+    /**
      * @return bool true when the transfer is finished, false when it must be re-queued for a redirect.
      */
-    private function complete(Transfer $transfer, int $curlResult): bool
+    private function complete(Transfer $transfer, int $curlResult, float $deadline): bool
     {
-        if ($curlResult !== CURLE_OK && !$transfer->tooLarge) {
+        if ($curlResult !== CURLE_OK && $transfer->limit === null) {
+            // The request timeout is shortened to the deadline, so a timeout at the deadline is the time gate.
+            if ($curlResult === CURLE_OPERATION_TIMEDOUT && microtime(true) >= $deadline - 0.05) {
+                $transfer->limit = Limit::Time;
+            }
             $transfer->error = curl_strerror($curlResult) ?? "cURL error {$curlResult}";
 
             return true;
@@ -197,6 +236,7 @@ final class HttpClient
         }
 
         if ($transfer->redirects >= $this->maxRedirects) {
+            $transfer->limit = Limit::Redirects;
             $transfer->error = 'Too many redirects';
 
             return true;

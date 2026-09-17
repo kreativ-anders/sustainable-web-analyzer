@@ -1,0 +1,165 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Sustainable Web Analyzer",
+    "version": "1.0.0",
+    "description": "How sustainable is a web page: weight, file types, semantic HTML, green hosting, server locations, cookies and CO2 per visit. Results are cached for a week."
+  },
+  "security": [],
+  "tags": [
+    { "name": "Analysis", "description": "Analyze a web page." }
+  ],
+  "paths": {
+    "/api/": {
+      "get": {
+        "tags": ["Analysis"],
+        "operationId": "analyze",
+        "summary": "Analyze a web page",
+        "description": "Requires an `Origin` from `allowed_origins` or a same-origin request.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "description": "HTTPS URL, port 443. The scheme may be omitted.",
+            "schema": { "type": "string", "maxLength": 2048 },
+            "example": "https://kreativ-anders.de"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Analysis" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error", "description": "`url` missing or invalid" },
+          "403": { "$ref": "#/components/responses/Error", "description": "Origin not allowed" },
+          "405": { "$ref": "#/components/responses/Error", "description": "Method not allowed" },
+          "422": { "$ref": "#/components/responses/Error", "description": "Host not public, port not 443 or domain unknown" },
+          "429": {
+            "description": "Rate limit reached",
+            "headers": { "Retry-After": { "schema": { "type": "integer" }, "description": "Seconds" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "500": { "$ref": "#/components/responses/Error", "description": "Unexpected error" },
+          "502": { "$ref": "#/components/responses/Error", "description": "Page not reachable or HTTP ≥ 400" },
+          "503": { "$ref": "#/components/responses/Error", "description": "Maintenance mode" }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Error": {
+        "description": "Error",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string", "description": "German message", "example": "Die Webseite konnte nicht abgerufen werden." }
+        }
+      },
+      "Analysis": {
+        "type": "object",
+        "required": ["meta", "requests", "bytes", "types", "hosts", "green", "cookies", "divification", "co2"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "requests": {
+            "type": "object",
+            "description": "URL → bytes (page, scripts, stylesheets, images)",
+            "additionalProperties": { "type": "integer", "minimum": 0 },
+            "example": { "https://kreativ-anders.de/": 11858, "https://kreativ-anders.de/assets/css/main.min.css": 88362 }
+          },
+          "bytes": { "type": "integer", "minimum": 0, "description": "Sum of `requests`, uncompressed", "example": 217543 },
+          "types": {
+            "type": "object",
+            "description": "File extension → count",
+            "additionalProperties": { "type": "integer", "minimum": 1 },
+            "example": { "css": 2, "js": 2, "png": 4 }
+          },
+          "hosts": {
+            "type": "object",
+            "description": "Host → server country (ISO 3166-1 alpha-2), `null` if unknown",
+            "additionalProperties": { "type": ["string", "null"] },
+            "example": { "kreativ-anders.de": "DE" }
+          },
+          "green": { "type": "boolean", "description": "Green hosting (The Green Web Foundation)" },
+          "cookies": { "type": "boolean", "description": "Sets cookies or loads a consent manager" },
+          "divification": { "type": "boolean", "description": "More than one `<div>` nested ≥ 4 levels deep" },
+          "co2": { "$ref": "#/components/schemas/Co2" }
+        }
+      },
+      "Meta": {
+        "type": "object",
+        "required": ["url", "analyzed_at", "final_url", "duration_ms", "skipped", "sizes", "truncated", "limits", "cached", "version"],
+        "properties": {
+          "url": { "type": "string", "format": "uri", "description": "Normalized input URL" },
+          "analyzed_at": { "type": "string", "format": "date-time" },
+          "final_url": { "type": "string", "format": "uri", "description": "URL after redirects" },
+          "duration_ms": { "type": "integer", "minimum": 0 },
+          "skipped": { "type": "integer", "minimum": 0, "description": "Resources that could not be fetched" },
+          "sizes": {
+            "type": "object",
+            "description": "How resource sizes were measured",
+            "required": ["content_length", "download"],
+            "properties": {
+              "content_length": { "type": "integer", "minimum": 0, "description": "HEAD `Content-Length`" },
+              "download": { "type": "integer", "minimum": 0, "description": "Full download" }
+            }
+          },
+          "truncated": { "type": "boolean", "description": "At least one gate was reached (`limits` is not empty)" },
+          "limits": {
+            "type": "array",
+            "description": "Gates that stopped the analysis early. Any gate rates the page F; bytes and grams are then a lower bound.",
+            "items": { "type": "string", "enum": ["time", "resources", "redirects", "resource_bytes", "download_bytes"] },
+            "example": []
+          },
+          "cached": { "type": "boolean", "description": "Served from cache" },
+          "version": { "type": "string", "example": "1.0.0" }
+        }
+      },
+      "Co2": {
+        "type": "object",
+        "description": "Sustainable Web Design Model v4",
+        "required": ["model", "model_version", "co2js_version", "per_visit", "per_byte", "segments", "grid_intensity", "rating", "penalized", "unit"],
+        "properties": {
+          "model": { "type": "string", "const": "swd" },
+          "model_version": { "type": "integer", "const": 4 },
+          "co2js_version": { "type": "string", "example": "0.19.0" },
+          "per_visit": { "type": "number", "minimum": 0, "description": "g CO2e per visit", "example": 0.0263 },
+          "per_byte": { "type": "number", "minimum": 0, "description": "g CO2e for `bytes`", "example": 0.0263 },
+          "segments": {
+            "type": "object",
+            "description": "`per_visit` split up",
+            "required": ["operational", "embodied"],
+            "properties": {
+              "operational": { "type": "number", "minimum": 0, "description": "Electricity" },
+              "embodied": { "type": "number", "minimum": 0, "description": "Hardware manufacturing" }
+            }
+          },
+          "grid_intensity": {
+            "type": "object",
+            "description": "g CO2e/kWh",
+            "required": ["data_center", "network", "device", "source"],
+            "properties": {
+              "data_center": { "type": "number", "description": "Byte-weighted average of the server countries", "example": 342 },
+              "network": { "type": "number", "description": "Global average", "example": 494 },
+              "device": { "type": "number", "description": "Global average", "example": 494 },
+              "source": { "type": "string", "example": "Our World in Data (Ember, Energy Institute), CC BY 4.0" }
+            }
+          },
+          "rating": {
+            "type": ["string", "null"],
+            "enum": ["A+", "A", "B", "C", "D", "E", "F", null],
+            "description": "`F` if `penalized`, otherwise `null` for 0 bytes"
+          },
+          "penalized": { "type": "boolean", "description": "A gate was reached (see `meta.limits`), so the rating is F" },
+          "unit": { "type": "string", "const": "g" }
+        }
+      }
+    }
+  }
+}
