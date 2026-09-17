@@ -1,0 +1,12 @@
+# Only needed if the project root (instead of public/) has to be the document root on Apache.
+# Every request is routed to public/index.php, so src/, var/, config.php etc. are never served.
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^ public/index.php [L]
+</IfModule>
+
+<IfModule !mod_rewrite.c>
+  Require all denied
+</IfModule>

@@ -1,0 +1,32 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use SustainableWebAnalyzer\Analyzer;
+use SustainableWebAnalyzer\AnalyzerException;
+use SustainableWebAnalyzer\Cache;
+use SustainableWebAnalyzer\Config;
+use SustainableWebAnalyzer\UrlGuard;
+
+if (PHP_SAPI !== 'cli') {
+    exit(1);
+}
+
+require dirname(__DIR__) . '/src/bootstrap.php';
+
+if (!isset($argv[1])) {
+    fwrite(STDERR, "Usage: bin/analyze <url>\n");
+    exit(2);
+}
+
+$config = Config::load(dirname(__DIR__));
+
+try {
+    $analyzer = Analyzer::fromConfig($config, new Cache((string) $config->get('cache_dir')));
+    $result = $analyzer->analyze(UrlGuard::normalizeInput($argv[1]));
+    echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), "\n";
+} catch (AnalyzerException $e) {
+    fwrite(STDERR, $e->getMessage() . ($e->detail !== '' ? " ({$e->detail})" : '') . "\n");
+    exit(1);
+}
