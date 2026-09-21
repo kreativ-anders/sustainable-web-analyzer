@@ -1,0 +1,102 @@
+# Ploi.io vhost for the Sustainable Web Analyzer (swa.kreativ-anders.dev).
+#
+# Paste this into Ploi -> Site -> Manage -> Nginx configuration, replacing the default template.
+# It keeps every "Ploi … do not remove!" include and the SSL/header block, and only changes what
+# the app needs:
+#
+#   * root is <site>/docs, not the repository root -> config.php, var/, src/, .git/ can never be served
+#   * only "/api/" (and "/api") is passed to PHP-FPM, pointed at <site>/index.php outside the root
+#   * no "try_files … /index.php?$query_string" and no "location ~ \.php$" (this is not a Laravel app)
+#   * a 45 s fastcgi_read_timeout, because an uncached analysis may run up to max_execution_time (20 s)
+#   * nginx-side rate/connection limits, so a single client cannot occupy the whole PHP-FPM pool
+#
+# Before saving, check the two marked lines: the PHP-FPM socket version and the site path.
+
+# Every uncached analysis holds a PHP-FPM worker. These limits are http-wide, so the zone names must stay
+# unique across all sites on this server. The app's own rate limit (uncached analyses per IP) still applies.
+limit_req_zone $binary_remote_addr zone=swa_requests:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=swa_connections:10m;
+
+# Ploi Webserver Configuration, do not remove!
+include /etc/nginx/ploi/swa.kreativ-anders.dev/before/*;
+
+server {
+    listen 80;
+    listen [::]:80;
+
+    # CHECK: the site path Ploi created, plus "/docs" as the document root.
+    set $app /home/ploi/swa.kreativ-anders.dev;
+    root $app/docs;
+
+    server_name swa.kreativ-anders.dev;
+
+    include /etc/nginx/ssl/swa.kreativ-anders.dev;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ecdh_curve X25519:prime256v1:secp384r1;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_dhparam /etc/nginx/dhparams.pem;
+
+    index index.html;
+
+    # Set at server level so both locations below inherit them: an add_header inside a location would
+    # otherwise drop all of these for that location.
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    charset utf-8;
+    server_tokens off;
+    client_max_body_size 1k; # the API only accepts GET
+
+    # JSON responses compress well (fewer bytes on the wire).
+    gzip on;
+    gzip_types application/json text/css text/plain text/xml application/javascript;
+    gzip_min_length 512;
+
+    # Ploi Configuration, do not remove!
+    include /etc/nginx/ploi/swa.kreativ-anders.dev/server/*;
+
+    access_log off; # client IPs are personal data; the app does its own rate limiting
+    error_log  /var/log/nginx/swa.kreativ-anders.dev-error.log error;
+
+    # The API. "/api" without the slash is accepted too: a redirect would break CORS preflight requests.
+    location ~ ^/api/?$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $app/index.php;
+        fastcgi_param DOCUMENT_ROOT $app;
+        fastcgi_param SCRIPT_NAME /api/;
+        fastcgi_param HTTP_PROXY ""; # httpoxy
+        fastcgi_hide_header X-Powered-By;
+
+        # CHECK: must match the PHP version selected for this site in Ploi (the app needs 8.2+).
+        # "ls /run/php/" lists the sockets available on the server.
+        fastcgi_pass unix:/run/php/php8.5-fpm.sock;
+        fastcgi_buffers 32 32k;
+
+        limit_req zone=swa_requests burst=20 nodelay;
+        limit_conn swa_connections 4;
+        limit_req_status 429;
+        limit_conn_status 429;
+
+        # An analysis may take max_execution_time (20 s) plus network overhead.
+        fastcgi_read_timeout 45s;
+    }
+
+    # Landing page, API reference (api.html + openapi.json), llms.txt, robots.txt, sitemap.xml, og.png.
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location = /favicon.ico { access_log off; log_not_found off; }
+    location = /robots.txt  { access_log off; log_not_found off; }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}
+
+# Ploi Webserver Configuration, do not remove!
+include /etc/nginx/ploi/swa.kreativ-anders.dev/after/*;
