@@ -29,7 +29,76 @@
         "responses": {
           "200": {
             "description": "Result",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Analysis" } } }
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Analysis" },
+                "example": {
+                  "meta": {
+                    "url": "https://kreativ-anders.de/",
+                    "analyzed_at": "2026-09-21T17:51:59+02:00",
+                    "final_url": "https://kreativ-anders.de/",
+                    "duration_ms": 1272,
+                    "skipped": 0,
+                    "sizes": {
+                      "content_length": 11,
+                      "download": 0
+                    },
+                    "truncated": false,
+                    "limits": [],
+                    "cached": true,
+                    "version": "1.0.0"
+                  },
+                  "requests": {
+                    "https://kreativ-anders.de/": 11858,
+                    "https://api.pirsch.io/pirsch.js": 4427,
+                    "https://kreativ-anders.de/assets/js/templates/home.js?52a8275d8d42e8b66bb1afcb6e2d169f": 1107,
+                    "https://kreativ-anders.de/assets/css/main.min.css": 88362,
+                    "https://kreativ-anders.de/assets/css/templates/home.css": 328,
+                    "https://kreativ-anders.de/media/pages/home/7ffc5629e3-1668585768/lean.gif": 3007,
+                    "https://kreativ-anders.de/media/pages/home/343ad23ba5-1668585768/transparent.gif": 6056,
+                    "https://kreativ-anders.de/media/pages/home/210eafff01-1668585768/success.gif": 35365,
+                    "https://kreativ-anders.de/media/pages/home/4f6760e671-1668585768/stabilo-promotion-products-logo-450x300.png": 19381,
+                    "https://kreativ-anders.de/media/pages/home/095e3b78a3-1668585768/roedl-energie-logo-450x300.png": 16222,
+                    "https://kreativ-anders.de/media/pages/home/cd9f661143-1668585768/meflotec-logo-450x300.png": 11764,
+                    "https://kreativ-anders.de/media/pages/home/4f0d09447f-1668585768/versicherungskammer-logo-450x300.png": 19666
+                  },
+                  "bytes": 217543,
+                  "types": {
+                    "js": 2,
+                    "css": 2,
+                    "gif": 3,
+                    "png": 4
+                  },
+                  "hosts": {
+                    "kreativ-anders.de": "DE",
+                    "api.pirsch.io": "DE"
+                  },
+                  "green": true,
+                  "cookies": false,
+                  "divification": false,
+                  "co2": {
+                    "model": "swd",
+                    "model_version": 4,
+                    "co2js_version": "0.19.0",
+                    "per_visit": 0.02632922929,
+                    "per_byte": 0.02632922929,
+                    "segments": {
+                      "operational": 0.014937807638,
+                      "embodied": 0.011391421652
+                    },
+                    "grid_intensity": {
+                      "data_center": 330,
+                      "network": 494,
+                      "device": 494,
+                      "source": "Our World in Data (Ember, Energy Institute), CC BY 4.0"
+                    },
+                    "rating": "A+",
+                    "penalized": false,
+                    "unit": "g"
+                  }
+                }
+              }
+            }
           },
           "400": { "$ref": "#/components/responses/Error", "description": "`url` missing or invalid" },
           "403": { "$ref": "#/components/responses/Error", "description": "Origin not allowed" },
@@ -71,24 +140,24 @@
             "type": "object",
             "description": "URL → bytes (page, scripts, stylesheets, images)",
             "additionalProperties": { "type": "integer", "minimum": 0 },
-            "example": { "https://kreativ-anders.de/": 11858, "https://kreativ-anders.de/assets/css/main.min.css": 88362 }
+            "example": { "https://kreativ-anders.de/": 11858, "https://api.pirsch.io/pirsch.js": 4427, "https://kreativ-anders.de/assets/css/main.min.css": 88362 }
           },
           "bytes": { "type": "integer", "minimum": 0, "description": "Sum of `requests`, uncompressed", "example": 217543 },
           "types": {
             "type": "object",
             "description": "File extension → count",
             "additionalProperties": { "type": "integer", "minimum": 1 },
-            "example": { "css": 2, "js": 2, "png": 4 }
+            "example": { "js": 2, "css": 2, "gif": 3, "png": 4 }
           },
           "hosts": {
             "type": "object",
             "description": "Host → server country (ISO 3166-1 alpha-2), `null` if unknown",
             "additionalProperties": { "type": ["string", "null"] },
-            "example": { "kreativ-anders.de": "DE" }
+            "example": { "kreativ-anders.de": "DE", "api.pirsch.io": "DE" }
           },
-          "green": { "type": "boolean", "description": "Green hosting (The Green Web Foundation)" },
-          "cookies": { "type": "boolean", "description": "Sets cookies or loads a consent manager" },
-          "divification": { "type": "boolean", "description": "More than one `<div>` nested ≥ 4 levels deep" },
+          "green": { "type": "boolean", "description": "Green hosting (The Green Web Foundation)", "example": true },
+          "cookies": { "type": "boolean", "description": "Sets cookies or loads a consent manager", "example": false },
+          "divification": { "type": "boolean", "description": "More than one `<div>` nested ≥ 4 levels deep", "example": false },
           "co2": { "$ref": "#/components/schemas/Co2" }
         }
       },
@@ -96,28 +165,28 @@
         "type": "object",
         "required": ["url", "analyzed_at", "final_url", "duration_ms", "skipped", "sizes", "truncated", "limits", "cached", "version"],
         "properties": {
-          "url": { "type": "string", "format": "uri", "description": "Normalized input URL" },
-          "analyzed_at": { "type": "string", "format": "date-time" },
-          "final_url": { "type": "string", "format": "uri", "description": "URL after redirects" },
-          "duration_ms": { "type": "integer", "minimum": 0 },
-          "skipped": { "type": "integer", "minimum": 0, "description": "Resources that could not be fetched" },
+          "url": { "type": "string", "format": "uri", "description": "Normalized input URL", "example": "https://kreativ-anders.de/" },
+          "analyzed_at": { "type": "string", "format": "date-time", "example": "2026-09-21T17:51:59+02:00" },
+          "final_url": { "type": "string", "format": "uri", "description": "URL after redirects", "example": "https://kreativ-anders.de/" },
+          "duration_ms": { "type": "integer", "minimum": 0, "example": 1272 },
+          "skipped": { "type": "integer", "minimum": 0, "description": "Resources that could not be fetched", "example": 0 },
           "sizes": {
             "type": "object",
             "description": "How resource sizes were measured",
             "required": ["content_length", "download"],
             "properties": {
-              "content_length": { "type": "integer", "minimum": 0, "description": "HEAD `Content-Length`" },
-              "download": { "type": "integer", "minimum": 0, "description": "Full download" }
+              "content_length": { "type": "integer", "minimum": 0, "description": "HEAD `Content-Length`", "example": 11 },
+              "download": { "type": "integer", "minimum": 0, "description": "Full download", "example": 0 }
             }
           },
-          "truncated": { "type": "boolean", "description": "At least one gate was reached (`limits` is not empty)" },
+          "truncated": { "type": "boolean", "description": "At least one gate was reached (`limits` is not empty)", "example": false },
           "limits": {
             "type": "array",
             "description": "Gates that stopped the analysis early. Any gate rates the page F; bytes and grams are then a lower bound.",
             "items": { "type": "string", "enum": ["time", "resources", "redirects", "resource_bytes", "download_bytes"] },
             "example": []
           },
-          "cached": { "type": "boolean", "description": "Served from cache" },
+          "cached": { "type": "boolean", "description": "Served from cache", "example": true },
           "version": { "type": "string", "example": "1.0.0" }
         }
       },
@@ -129,15 +198,15 @@
           "model": { "type": "string", "const": "swd" },
           "model_version": { "type": "integer", "const": 4 },
           "co2js_version": { "type": "string", "example": "0.19.0" },
-          "per_visit": { "type": "number", "minimum": 0, "description": "g CO2e per visit", "example": 0.0263 },
-          "per_byte": { "type": "number", "minimum": 0, "description": "g CO2e for `bytes`", "example": 0.0263 },
+          "per_visit": { "type": "number", "minimum": 0, "description": "g CO2e per visit", "example": 0.02632922929 },
+          "per_byte": { "type": "number", "minimum": 0, "description": "g CO2e for `bytes`", "example": 0.02632922929 },
           "segments": {
             "type": "object",
             "description": "`per_visit` split up",
             "required": ["operational", "embodied"],
             "properties": {
-              "operational": { "type": "number", "minimum": 0, "description": "Electricity" },
-              "embodied": { "type": "number", "minimum": 0, "description": "Hardware manufacturing" }
+              "operational": { "type": "number", "minimum": 0, "description": "Electricity", "example": 0.014937807638 },
+              "embodied": { "type": "number", "minimum": 0, "description": "Hardware manufacturing", "example": 0.011391421652 }
             }
           },
           "grid_intensity": {
@@ -145,7 +214,7 @@
             "description": "g CO2e/kWh",
             "required": ["data_center", "network", "device", "source"],
             "properties": {
-              "data_center": { "type": "number", "description": "Byte-weighted average of the server countries", "example": 342 },
+              "data_center": { "type": "number", "description": "Byte-weighted average of the server countries", "example": 330 },
               "network": { "type": "number", "description": "Global average", "example": 494 },
               "device": { "type": "number", "description": "Global average", "example": 494 },
               "source": { "type": "string", "example": "Our World in Data (Ember, Energy Institute), CC BY 4.0" }
@@ -154,9 +223,10 @@
           "rating": {
             "type": ["string", "null"],
             "enum": ["A+", "A", "B", "C", "D", "E", "F", null],
-            "description": "`F` if `penalized`, otherwise `null` for 0 bytes"
+            "description": "`F` if `penalized`, otherwise `null` for 0 bytes",
+            "example": "A+"
           },
-          "penalized": { "type": "boolean", "description": "A gate was reached (see `meta.limits`), so the rating is F" },
+          "penalized": { "type": "boolean", "description": "A gate was reached (see `meta.limits`), so the rating is F", "example": false },
           "unit": { "type": "string", "const": "g" }
         }
       }
