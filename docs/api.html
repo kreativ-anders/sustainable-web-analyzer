@@ -28,7 +28,8 @@
       return Object.fromEntries(Object.entries(node).map(([key, value]) => [key, dereference(value, root)]));
     };
 
-    fetch('openapi.json')
+    // No explicit Cache-Control on the spec: revalidate so doc updates show up immediately.
+    fetch('openapi.json', { cache: 'no-cache' })
       .then((response) => response.json())
       .then((spec) => SwaggerUIBundle({
         spec: dereference(spec, spec),
