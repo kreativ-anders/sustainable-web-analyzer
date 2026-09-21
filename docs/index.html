@@ -117,7 +117,7 @@
   <main>
     <section class="hero" aria-labelledby="title">
       <h1 id="title">How sustainable is your website?</h1>
-      <p class="lead">Every visit travels through servers, cables and power grids. Make that chain visible, and make your site lighter, greener and closer to home.</p>
+      <p class="lead">Every visit to your website travels through servers, cables and power grids. The Sustainable Web Analyzer makes that chain visible, so you can make your website lighter, greener and closer to home.</p>
       <p class="actions">
         <a class="button primary" href="https://kreativ-anders.de/web-analyse">Try it at kreativ-anders.de</a>
         <a class="button" href="api.html">API</a>
@@ -137,17 +137,19 @@
         <li><h3>Cookies</h3><p>No cookies means no consent banner and more privacy for your visitors.</p></li>
         <li><h3>CO2</h3><p>All of it adds up to grams of CO2 per visit, graded from A+ to F.</p></li>
       </ol>
-      <p>Small choices add up: fewer bytes, lean code, green hosting nearby and no tracking make a site faster, cleaner and more independent.</p>
+      <p>Small choices add up: fewer bytes, lean code, green hosting nearby and no tracking make a website faster, cleaner and more independent. A sustainable website is also a better one for visitors: it loads quickly on slow connections, works on older devices and respects their privacy.</p>
     </section>
 
     <section id="method" aria-labelledby="method-title">
       <h2 id="method-title">How it works</h2>
       <p>The tool adds up everything a first visit downloads: the HTML plus its scripts, stylesheets and images. It checks where those files are hosted and whether the hosting runs on green energy.</p>
       <p>Bytes become energy, energy becomes CO2 using the power mix of the server's country. The result is grams of CO2 per visit and a grade from A+ to F, following the <a href="https://sustainablewebdesign.org/estimating-digital-emissions/">Sustainable Web Design Model</a> v4.</p>
+      <p>Each result is cached for a week, so repeated checks of the same website cost no extra energy. Every step of the analysis is documented in the <a href="api.html">API reference</a>, and the full response schema is in <a href="openapi.json">openapi.json</a>.</p>
     </section>
 
     <section id="example" aria-labelledby="example-title">
       <h2 id="example-title">Example</h2>
+      <p>Analyze any website with a single request. The JSON response lists the bytes a first visit downloads, the country of every host, whether the hosting is green and how much CO2 one visit causes:</p>
       <pre><code>GET /api/?url=kreativ-anders.de
 
 {
