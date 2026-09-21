@@ -1,0 +1,56 @@
+# Wharf (nginx) vhost for local development: the equivalent of nginx.conf.example.
+#
+# Wharf's default block uses the project folder as document root and only passes *.php files to PHP,
+# so "/api/" would 404. This one serves docs/ and passes "/api/" to index.php, like production does.
+#
+# Save as ~/Wharf/config/vhosts/sustainable-web-analyzer.nginx.conf (Wharf restarts the webserver on save).
+# Keep every {{…}} placeholder: Wharf fills them in on each start. {{listen}}, {{ssl}} and {{server_name}}
+# are required.
+#
+#   https://<project>.localhost/           landing page (docs/)
+#   https://<project>.localhost/api/?url=  API; send an "Origin" header from allowed_origins (see config.default.php)
+#
+# Deliberately different from production: no HTTP -> HTTPS redirect and no HSTS (Wharf owns the listeners and
+# a sticky HSTS entry would follow every other *.localhost project), no nginx rate limiting (limit_req_zone
+# is http-wide; the app's own rate limit still applies) and the access log stays on for debugging.
+
+server {
+    {{listen}}
+    {{ssl}}
+    server_name {{server_name}};
+
+    # docs/ is the document root, so config.php, var/ and src/ can not be served.
+    root "{{root}}/docs";
+    index index.html;
+
+    server_tokens off;
+    access_log "{{log_dir}}/access.log";
+    error_log "{{log_dir}}/error.log";
+    client_max_body_size 1k; # the API only accepts GET
+
+    # JSON responses compress well (fewer bytes on the wire).
+    gzip on;
+    gzip_types application/json text/css text/plain text/xml application/javascript;
+    gzip_min_length 512;
+
+    # "/api" is accepted as well: a redirect to "/api/" would break CORS preflight requests.
+    location ~ ^/api/?$ {
+        include "{{fastcgi}}";
+        fastcgi_param SCRIPT_FILENAME "{{root}}/index.php";
+        fastcgi_param DOCUMENT_ROOT "{{root}}";
+        fastcgi_param SCRIPT_NAME /api/;
+        fastcgi_param HTTP_PROXY ""; # httpoxy
+        fastcgi_hide_header X-Powered-By;
+        fastcgi_pass {{php}};
+
+        # An analysis may take max_execution_time (20 s) plus network overhead.
+        fastcgi_read_timeout 45s;
+    }
+
+    # Landing page, API reference (api.html + openapi.json), llms.txt, robots.txt, sitemap.xml, og.png.
+    location / {
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
+        try_files $uri $uri/ =404;
+    }
+}
