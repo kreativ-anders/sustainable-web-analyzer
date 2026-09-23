@@ -326,16 +326,16 @@ check('api: Retry-After', true, (int) ($response->headers['Retry-After'] ?? 0) >
 check('api: nothing left', '0', $response->headers['X-RateLimit-Remaining'] ?? null);
 check('api: a cached result stays free', 200, $limited->handle($browser, ['url' => 'a.example'])->status);
 
-// The whitelist.
-$whitelisted = ['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '192.0.2.5'];
+// rate_limit_exempt_ips.
+$exemptCaller = ['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '192.0.2.5'];
 $open = $makeStubApi(['rate_limit_per_ip' => 1, 'rate_limit_exempt_ips' => ['192.0.2.5', '2001:db8::/32']]);
-check('api: whitelisted 1st', 200, $open->handle($whitelisted, ['url' => 'd.example'])->status);
-check('api: whitelisted 2nd', 200, $open->handle($whitelisted, ['url' => 'e.example'])->status);
-check('api: whitelisted 3rd', 200, $open->handle($whitelisted, ['url' => 'f.example'])->status);
-check('api: whitelisted callers get no budget headers', false, isset($open->handle($whitelisted, ['url' => 'g.example'])->headers['X-RateLimit-Remaining']));
+check('api: exempt 1st', 200, $open->handle($exemptCaller, ['url' => 'd.example'])->status);
+check('api: exempt 2nd', 200, $open->handle($exemptCaller, ['url' => 'e.example'])->status);
+check('api: exempt 3rd', 200, $open->handle($exemptCaller, ['url' => 'f.example'])->status);
+check('api: exempt callers get no budget headers', false, isset($open->handle($exemptCaller, ['url' => 'g.example'])->headers['X-RateLimit-Remaining']));
 
 $inRange = ['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '2001:db8::1'];
-check('api: a whitelisted CIDR counts', 200, $open->handle($inRange, ['url' => 'h.example'])->status);
+check('api: an exempt CIDR counts', 200, $open->handle($inRange, ['url' => 'h.example'])->status);
 check('api: …every time', 200, $open->handle($inRange, ['url' => 'h2.example'])->status);
 
 $stranger = ['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '198.51.100.4'];
@@ -351,11 +351,11 @@ check('api: the shared message is a different one', true, str_contains($body($re
 check('api: www is the same target', 429, $perTarget->handle($browser, ['url' => 'www.target.example/three'])->status);
 check('api: a different target is fine', 200, $perTarget->handle($browser, ['url' => 'other.example/'])->status);
 
-// Closing the endpoint applies to everyone, whitelist included.
+// Closing the endpoint applies to everyone, exempt IPs included.
 $closed = $makeStubApi(['enabled' => false, 'rate_limit_exempt_ips' => ['192.0.2.5']]);
 check('api: maintenance closes the API', 503, $closed->handle($browser, ['url' => 'j.example'])->status);
 check('api: maintenance message', true, str_contains($body($closed->handle($browser, ['url' => 'k.example']))['error'], 'Wartungsmodus'));
-check('api: maintenance applies to the whitelist too', 503, $closed->handle($whitelisted, ['url' => 'l.example'])->status);
+check('api: maintenance applies to exempt IPs too', 503, $closed->handle($exemptCaller, ['url' => 'l.example'])->status);
 
 check('cacheKey: trailing slash', Api::cacheKey('https://example.com/a'), Api::cacheKey('https://example.com/a/'));
 check('cacheKey: root', 'result:example.com/', Api::cacheKey('https://example.com/'));
