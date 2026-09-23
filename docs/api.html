@@ -24,7 +24,7 @@
   <header class="intro">
     <nav aria-label="Site"><a href="./">🌱 Sustainable Web Analyzer</a> · <a href="openapi.json">openapi.json</a> · <a href="llms.txt">llms.txt</a></nav>
     <h1>Sustainable Web Analyzer API</h1>
-    <p>The API reference of the Sustainable Web Analyzer. One request, <code>GET /api/?url=…</code>, analyzes a web page and returns JSON: page weight, file types, semantic HTML, green hosting, server locations, cookies and CO2 per visit with a grade from A+ to F. Below are every request parameter and the full response schema, generated from the <a href="openapi.json">OpenAPI spec</a>.</p>
+    <p>The API reference of the Sustainable Web Analyzer. One request, <code>GET /api/?url=…</code>, analyzes a web page and returns JSON: page weight, file types, semantic HTML, green hosting, server locations, cookies and CO2 per visit with a grade from A+ to F. Below are every request parameter and the full response schema, generated from the <a href="openapi.json">OpenAPI spec</a>. Use <em>Try it out</em> to run a real analysis from this page — it counts against the same budget as any other caller, ten checks a day.</p>
   </header>
   <main id="swagger-ui">
     <noscript><p>The interactive API reference needs JavaScript. Read the <a href="openapi.json">OpenAPI spec</a> directly.</p></noscript>
@@ -52,7 +52,7 @@
       .then((spec) => SwaggerUIBundle({
         spec: dereference(spec, spec),
         dom_id: '#swagger-ui',
-        supportedSubmitMethods: [],
+        supportedSubmitMethods: ['get'], // "Try it out" runs a real analysis against the public budget
         defaultModelRendering: 'model',
         defaultModelExpandDepth: 3,
         defaultModelsExpandDepth: 3,

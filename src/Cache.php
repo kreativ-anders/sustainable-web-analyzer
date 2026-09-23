@@ -102,7 +102,9 @@ final class Cache
                 if ($expires < $now) {
                     @unlink($path);
                 }
-            } elseif ($file->getMTime() < $now - 86_400) {
+            } elseif (!str_ends_with($path, '.slot') && $file->getMTime() < $now - 86_400) {
+                // WARNING: .slot files must survive. Deleting a locked one recreates it under the
+                // same name and leaks a slot past max_concurrent_analyses.
                 @unlink($path);
             }
         }

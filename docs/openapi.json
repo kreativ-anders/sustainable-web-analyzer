@@ -5,6 +5,9 @@
     "version": "1.0.0",
     "description": "How sustainable is a web page: weight, file types, semantic HTML, green hosting, server locations, cookies and CO2 per visit. Results are cached for a week."
   },
+  "servers": [
+    { "url": "https://swa.kreativ-anders.dev", "description": "Public endpoint" }
+  ],
   "security": [],
   "tags": [
     { "name": "Analysis", "description": "Analyze a web page." }
@@ -15,7 +18,7 @@
         "tags": ["Analysis"],
         "operationId": "analyze",
         "summary": "Analyze a web page",
-        "description": "Requires an `Origin` from `allowed_origins` or a same-origin request.",
+        "description": "Open endpoint, protected by rate limits instead of keys. Per day and IP: 10 uncached analyses and 200 requests in total. Across all callers: 50 uncached analyses of any one target host and 6 running at the same time. Cached results count against none of it, so repeating a request is always free. Successful responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`.",
         "parameters": [
           {
             "name": "url",
@@ -101,17 +104,21 @@
             }
           },
           "400": { "$ref": "#/components/responses/Error", "description": "`url` missing or invalid" },
-          "403": { "$ref": "#/components/responses/Error", "description": "Origin not allowed" },
+          "403": { "$ref": "#/components/responses/Error", "description": "CORS preflight from an origin that is not allowed" },
           "405": { "$ref": "#/components/responses/Error", "description": "Method not allowed" },
-          "422": { "$ref": "#/components/responses/Error", "description": "Host not public, port not 443 or domain unknown" },
+          "422": { "$ref": "#/components/responses/Error", "description": "IP address as target, port not 443, host not public or domain unknown" },
           "429": {
-            "description": "Rate limit reached",
+            "description": "Rate limit reached \u2013 retry after the given number of seconds",
             "headers": { "Retry-After": { "schema": { "type": "integer" }, "description": "Seconds" } },
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
           },
           "500": { "$ref": "#/components/responses/Error", "description": "Unexpected error" },
           "502": { "$ref": "#/components/responses/Error", "description": "Page not reachable or HTTP ≥ 400" },
-          "503": { "$ref": "#/components/responses/Error", "description": "Maintenance mode" }
+          "503": {
+            "description": "Maintenance mode, or every analysis slot is busy",
+            "headers": { "Retry-After": { "schema": { "type": "integer" }, "description": "Seconds" } },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
         }
       }
     }

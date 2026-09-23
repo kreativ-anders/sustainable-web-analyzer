@@ -11,17 +11,22 @@
 
 return [
     // General
-    'enabled' => true,             // false = maintenance mode (HTTP 503)
+    'enabled' => true,             // false = maintenance mode (HTTP 503), also settable as SWA_ENABLED=false
     'debug' => false,              // true = append internal error details to error messages
     'timezone' => 'Europe/Berlin',
 
-    // Access control
-    'allowed_origins' => ['https://kreativ-anders.de', 'https://www.kreativ-anders.de'],
-    'require_origin' => true,      // reject requests that are neither from an allowed origin nor same-origin
-    'client_ip_header' => null,    // e.g. 'HTTP_X_REAL_IP' – only behind a trusted reverse proxy/CDN that sets it, otherwise it can be spoofed
-    'rate_limit_window' => 600,    // seconds
-    'rate_limit_per_ip' => 10,     // uncached analyses per IP per window (0 = unlimited)
-    'rate_limit_global' => 300,    // uncached analyses in total per window (0 = unlimited)
+    // Access control – see "Abuse protection" in the README.
+    'allowed_origins' => ['https://kreativ-anders.de', 'https://www.kreativ-anders.de'], // CORS only, grants nothing
+    'client_ip_header' => null,    // WARNING: only behind a proxy that always overwrites it, e.g. 'HTTP_X_REAL_IP'
+
+    // Rate limits. The same for everyone; cached results are free and count against nothing.
+    'rate_limit_exempt_ips' => [], // no limits for these, e.g. ['203.0.113.7', '2001:db8::/32']
+    'rate_limit_window' => 86400,        // seconds
+    'rate_limit_per_ip' => 10,           // uncached analyses per IP per window (0 = unlimited)
+    'rate_limit_requests_per_ip' => 200, // every request per IP, cached ones included (0 = unlimited)
+    'rate_limit_per_target' => 50,       // uncached analyses of one target host, all callers together
+    'rate_limit_global' => 1000,         // uncached analyses in total per window (0 = unlimited)
+    'max_concurrent_analyses' => 6,      // keep below the PHP-FPM pool size
 
     // Caching
     'cache_dir' => null,               // null = <project>/var/cache
@@ -49,4 +54,6 @@ return [
     'green_check_url' => 'https://api.thegreenwebfoundation.org/api/v3/greencheck/',
     'ipinfo_url' => 'https://ipinfo.io/',
     'ipinfo_token' => '',                 // works without a token, but with a low monthly limit
+    'max_geo_lookups' => 25,              // uncached IP -> country lookups per analysis (0 = unlimited)
+    'geo_lookups_per_day' => 1000,        // …and per day, to protect the ipinfo quota. Beyond it, country stays null
 ];

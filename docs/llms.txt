@@ -21,6 +21,8 @@ What it reports:
 - [OpenAPI spec](https://swa.kreativ-anders.dev/openapi.json): request parameters and the full JSON response schema
 - [Endpoint](https://swa.kreativ-anders.dev/api/?url=kreativ-anders.de): `GET /api/?url=…` returns the analysis as JSON
 
+The endpoint is open and needs no key, but it is rate limited: 10 uncached analyses per IP per day, at most 50 analyses of any one target site per day, 6 running at a time. Cached results are free and do not count, so repeating a request costs nothing. Successful responses carry `X-RateLimit-Remaining`. A limit answers with HTTP 429 (or 503 when all slots are busy) and a `Retry-After` header in seconds — wait for it instead of retrying immediately.
+
 ## Optional
 
 - [Live analysis](https://kreativ-anders.de/web-analyse): the tool in use on kreativ-anders.de

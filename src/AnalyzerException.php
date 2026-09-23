@@ -32,6 +32,11 @@ final class AnalyzerException extends RuntimeException
         return new self('Die Domain der Webseite konnte nicht gefunden werden.', 422, $detail);
     }
 
+    public static function busy(string $detail = ''): self
+    {
+        return new self('Der CO2 Check ist gerade ausgelastet. Bitte versuche es in einer Minute erneut.', 503, $detail);
+    }
+
     public static function unreachable(string $detail = ''): self
     {
         return new self('Die Webseite konnte nicht abgerufen werden.', 502, $detail);

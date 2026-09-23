@@ -18,6 +18,7 @@ use SustainableWebAnalyzer\Config;
 use SustainableWebAnalyzer\GridIntensity;
 use SustainableWebAnalyzer\HtmlInspector;
 use SustainableWebAnalyzer\RateLimiter;
+use SustainableWebAnalyzer\Semaphore;
 use SustainableWebAnalyzer\Url;
 use SustainableWebAnalyzer\UrlGuard;
 
@@ -105,6 +106,7 @@ throws('normalize: localhost', fn () => UrlGuard::normalizeInput('https://localh
 throws('normalize: single label host', fn () => UrlGuard::normalizeInput('https://intranet/'), 400);
 throws('normalize: .internal', fn () => UrlGuard::normalizeInput('https://db.internal/'), 400);
 throws('normalize: IPv6 literal', fn () => UrlGuard::normalizeInput('https://[::1]/'), 400);
+throws('normalize: IPv4 literal', fn () => UrlGuard::normalizeInput('https://8.8.8.8/'), 422);
 throws('normalize: too long', fn () => UrlGuard::normalizeInput('https://example.com/' . str_repeat('a', 2100)), 400);
 
 foreach ([
@@ -125,6 +127,10 @@ throws('pin: metadata IP', fn () => $guard->pin('https://169.254.169.254/latest/
 throws('pin: http', fn () => $guard->pin('http://8.8.8.8/'), 422);
 throws('pin: port', fn () => $guard->pin('https://8.8.8.8:8443/'), 422);
 check('pin: public IP literal', '8.8.8.8:443:8.8.8.8', $guard->pin('https://8.8.8.8/'));
+
+check('inRange: inside', true, UrlGuard::inRange('203.0.113.7', '203.0.113.0/24'));
+check('inRange: outside', false, UrlGuard::inRange('203.0.114.7', '203.0.113.0/24'));
+check('inRange: different family', false, UrlGuard::inRange('2001:db8::1', '203.0.113.0/24'));
 
 // ---------------------------------------------------------------------------------------------
 // HtmlInspector
@@ -240,6 +246,16 @@ check('rate limit: other bucket', 0, $limiter->hit('ip:5.6.7.8', 2));
 check('rate limit: disabled', 0, $limiter->hit('ip:1.2.3.4', 0));
 
 // ---------------------------------------------------------------------------------------------
+// Semaphore
+// ---------------------------------------------------------------------------------------------
+
+$semaphore = new Semaphore(temporaryDirectory(), 1);
+check('semaphore: runs the callback', 'ok', $semaphore->run(static fn (): string => 'ok'));
+throws('semaphore: no slot left', static fn () => $semaphore->run(static fn () => $semaphore->run(static fn () => 'nested')), 503);
+check('semaphore: the slot is free again', 'ok', $semaphore->run(static fn (): string => 'ok'));
+check('semaphore: 0 slots means unlimited', 'ok', (new Semaphore(temporaryDirectory(), 0))->run(static fn (): string => 'ok'));
+
+// ---------------------------------------------------------------------------------------------
 // Api
 // ---------------------------------------------------------------------------------------------
 
@@ -247,7 +263,6 @@ $root = dirname(__DIR__);
 $makeApi = static fn (array $overrides = []): Api => new Api(Config::load($root, $overrides + [
     'cache_dir' => temporaryDirectory(),
     'allowed_origins' => ['https://kreativ-anders.de'],
-    'require_origin' => true,
 ]));
 $browser = ['REQUEST_METHOD' => 'GET', 'HTTP_ORIGIN' => 'https://kreativ-anders.de', 'REMOTE_ADDR' => '203.0.113.7'];
 $body = static fn ($response): array => json_decode($response->body, true);
@@ -258,15 +273,13 @@ $response = $api->handle(['REQUEST_METHOD' => 'OPTIONS'] + $browser, []);
 check('api: preflight status', 204, $response->status);
 check('api: preflight CORS origin', 'https://kreativ-anders.de', $response->headers['Access-Control-Allow-Origin'] ?? null);
 
-$response = $api->handle(['HTTP_ORIGIN' => 'https://evil.example'] + $browser, ['url' => 'example.com']);
-check('api: foreign origin', 403, $response->status);
+// A public API: a foreign origin is served too, it only gets no CORS header.
+$response = $api->handle(['HTTP_ORIGIN' => 'https://evil.example'] + $browser, ['url' => 'https://127.0.0.1/']);
+check('api: foreign origin is served', 422, $response->status);
 check('api: foreign origin gets no CORS header', false, isset($response->headers['Access-Control-Allow-Origin']));
 
-$response = $api->handle(['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '203.0.113.7'], ['url' => 'example.com']);
-check('api: no origin', 403, $response->status);
-
-$response = $api->handle(['REQUEST_METHOD' => 'GET', 'HTTP_SEC_FETCH_SITE' => 'same-origin', 'REMOTE_ADDR' => '203.0.113.7'], ['url' => 'https://127.0.0.1']);
-check('api: same-origin request is allowed', 422, $response->status);
+$response = $api->handle(['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '203.0.113.7'], ['url' => 'https://127.0.0.1/']);
+check('api: a caller without Origin is served', 422, $response->status);
 
 check('api: POST', 405, $api->handle(['REQUEST_METHOD' => 'POST'] + $browser, [])->status);
 check('api: missing url', ['error' => 'Bitte gebe eine URL ein.'], $body($api->handle($browser, [])));
@@ -282,13 +295,67 @@ check('api: nosniff', 'nosniff', $response->headers['X-Content-Type-Options']);
 check('api: maintenance', 503, $makeApi(['enabled' => false])->handle($browser, ['url' => 'example.com'])->status);
 
 $debugResponse = $makeApi(['debug' => true])->handle($browser, ['url' => 'https://127.0.0.1/']);
-check('api: debug detail', true, str_contains($body($debugResponse)['error'], 'non-public address'));
+check('api: debug detail', true, str_contains($body($debugResponse)['error'], 'IP addresses are not accepted'));
 
-$limited = $makeApi(['rate_limit_per_ip' => 1]);
-check('api: rate limit 1st', 422, $limited->handle($browser, ['url' => 'https://127.0.0.1/'])->status);
-$response = $limited->handle($browser, ['url' => 'https://10.0.0.1/']);
-check('api: rate limit 2nd', 429, $response->status);
+// A stubbed analyzer keeps the rate-limit tests offline and instant.
+$makeStubApi = static fn (array $overrides = []): Api => new Api(
+    Config::load($root, $overrides + [
+        'cache_dir' => temporaryDirectory(),
+        'allowed_origins' => ['https://kreativ-anders.de'],
+    ]),
+    static fn () => new class () {
+        public function analyze(string $url): array
+        {
+            return ['meta' => ['url' => $url, 'cached' => false], 'requests' => [], 'types' => [], 'hosts' => [], 'co2' => ['rating' => 'A+', 'penalized' => false]];
+        }
+    },
+);
+
+$limited = $makeStubApi(['rate_limit_per_ip' => 2]);
+$response = $limited->handle($browser, ['url' => 'a.example']);
+check('api: 1st analysis', 200, $response->status);
+check('api: budget headers', ['2', '1'], [$response->headers['X-RateLimit-Limit'] ?? null, $response->headers['X-RateLimit-Remaining'] ?? null]);
+check('api: reset is in the future', true, (int) ($response->headers['X-RateLimit-Reset'] ?? 0) > time());
+check('api: 2nd analysis', ['200', '0'], [(string) $limited->handle($browser, ['url' => 'b.example'])->status, $limited->handle($browser, ['url' => 'b.example'])->headers['X-RateLimit-Remaining'] ?? null]);
+
+$response = $limited->handle($browser, ['url' => 'c.example']);
+check('api: 3rd is blocked', 429, $response->status);
+check('api: the message names the daily limit', true, str_contains($body($response)['error'], 'Limit von 2 Analysen pro Tag'));
+check('api: the message says when', true, str_contains($body($response)['error'], 'Stunden'));
 check('api: Retry-After', true, (int) ($response->headers['Retry-After'] ?? 0) > 0);
+check('api: nothing left', '0', $response->headers['X-RateLimit-Remaining'] ?? null);
+check('api: a cached result stays free', 200, $limited->handle($browser, ['url' => 'a.example'])->status);
+
+// The whitelist.
+$whitelisted = ['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '192.0.2.5'];
+$open = $makeStubApi(['rate_limit_per_ip' => 1, 'rate_limit_exempt_ips' => ['192.0.2.5', '2001:db8::/32']]);
+check('api: whitelisted 1st', 200, $open->handle($whitelisted, ['url' => 'd.example'])->status);
+check('api: whitelisted 2nd', 200, $open->handle($whitelisted, ['url' => 'e.example'])->status);
+check('api: whitelisted 3rd', 200, $open->handle($whitelisted, ['url' => 'f.example'])->status);
+check('api: whitelisted callers get no budget headers', false, isset($open->handle($whitelisted, ['url' => 'g.example'])->headers['X-RateLimit-Remaining']));
+
+$inRange = ['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '2001:db8::1'];
+check('api: a whitelisted CIDR counts', 200, $open->handle($inRange, ['url' => 'h.example'])->status);
+check('api: …every time', 200, $open->handle($inRange, ['url' => 'h2.example'])->status);
+
+$stranger = ['REQUEST_METHOD' => 'GET', 'REMOTE_ADDR' => '198.51.100.4'];
+check('api: an unlisted IP gets its one analysis', 200, $open->handle($stranger, ['url' => 'i.example'])->status);
+check('api: …and is blocked after it', 429, $open->handle($stranger, ['url' => 'i2.example'])->status);
+
+// Per target host: nobody can point the endpoint at one site with ?url=victim/?x=1,2,3…
+$perTarget = $makeStubApi(['rate_limit_per_target' => 1]);
+check('api: target limit 1st', 200, $perTarget->handle($browser, ['url' => 'target.example/one'])->status);
+$response = $perTarget->handle($browser, ['url' => 'target.example/two']);
+check('api: another path of the same target', 429, $response->status);
+check('api: the shared message is a different one', true, str_contains($body($response)['error'], 'stark ausgelastet'));
+check('api: www is the same target', 429, $perTarget->handle($browser, ['url' => 'www.target.example/three'])->status);
+check('api: a different target is fine', 200, $perTarget->handle($browser, ['url' => 'other.example/'])->status);
+
+// Closing the endpoint applies to everyone, whitelist included.
+$closed = $makeStubApi(['enabled' => false, 'rate_limit_exempt_ips' => ['192.0.2.5']]);
+check('api: maintenance closes the API', 503, $closed->handle($browser, ['url' => 'j.example'])->status);
+check('api: maintenance message', true, str_contains($body($closed->handle($browser, ['url' => 'k.example']))['error'], 'Wartungsmodus'));
+check('api: maintenance applies to the whitelist too', 503, $closed->handle($whitelisted, ['url' => 'l.example'])->status);
 
 check('cacheKey: trailing slash', Api::cacheKey('https://example.com/a'), Api::cacheKey('https://example.com/a/'));
 check('cacheKey: root', 'result:example.com/', Api::cacheKey('https://example.com/'));

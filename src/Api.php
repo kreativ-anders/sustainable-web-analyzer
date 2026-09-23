@@ -23,6 +23,8 @@ final class Api
     ];
 
     private readonly Cache $cache;
+    private readonly RateLimiter $limiter;
+    private readonly Semaphore $semaphore;
     private readonly Closure $analyzerFactory;
 
     /**
@@ -30,7 +32,11 @@ final class Api
      */
     public function __construct(private readonly Config $config, ?Closure $analyzerFactory = null)
     {
-        $this->cache = new Cache((string) $config->get('cache_dir'));
+        $directory = (string) $config->get('cache_dir');
+
+        $this->cache = new Cache($directory);
+        $this->limiter = new RateLimiter($directory . '/ratelimit', (int) $config->get('rate_limit_window'));
+        $this->semaphore = new Semaphore($directory . '/slots', (int) $config->get('max_concurrent_analyses'));
         $this->analyzerFactory = $analyzerFactory ?? Analyzer::fromConfig(...);
     }
 
@@ -61,8 +67,18 @@ final class Api
         if (!$this->config->get('enabled')) {
             return $this->error(503, 'Der CO2 Check befindet sich im Wartungsmodus.', $headers);
         }
-        if (!$this->isAllowedCaller($server, $originAllowed)) {
-            return $this->error(403, 'Zugriff verweigert.', $headers);
+
+        $ip = $this->clientIp($server);
+        $exempt = $this->isExempt($ip);
+
+        if (!$exempt) {
+            $headers += $this->budgetHeaders($ip);
+
+            // Counts cached answers too: serving one is cheap, but not free.
+            $retryAfter = $this->limiter->hit('req:' . self::clientKey($ip), (int) $this->config->get('rate_limit_requests_per_ip'));
+            if ($retryAfter > 0) {
+                return $this->error(429, 'Zu viele Anfragen. Bitte versuche es ' . self::inWords($retryAfter) . ' erneut.', $headers + ['Retry-After' => (string) $retryAfter]);
+            }
         }
 
         $input = $query['url'] ?? null;
@@ -79,9 +95,13 @@ final class Api
                 return $this->success($cached, true, $headers);
             }
 
-            $retryAfter = $this->rateLimit($server);
-            if ($retryAfter > 0) {
-                return $this->error(429, 'Zu viele Anfragen. Bitte versuche es später erneut.', $headers + ['Retry-After' => (string) $retryAfter]);
+            if (!$exempt) {
+                [$retryAfter, $message] = $this->rateLimit($ip, $url);
+                if ($retryAfter > 0) {
+                    return $this->error(429, $message, $this->budgetHeaders($ip) + $headers + ['Retry-After' => (string) $retryAfter]);
+                }
+
+                $headers = $this->budgetHeaders($ip) + $headers; // refresh: this request has just been counted
             }
 
             // Concurrent requests for the same URL wait for the first analysis instead of repeating it.
@@ -92,16 +112,23 @@ final class Api
                     return $this->success($cached, true, $headers);
                 }
 
-                $analyzer = ($this->analyzerFactory)($this->config, $this->cache);
-                $json = json_encode($analyzer->analyze($url), self::JSON_FLAGS);
-                $this->cache->set($cacheKey, $json, $this->cacheTtl(json_decode($json, false, 512, JSON_THROW_ON_ERROR)));
+                // After the lock: waiting for someone else's analysis must not occupy a slot.
+                $json = $this->semaphore->run(function () use ($url, $cacheKey): string {
+                    $analyzer = ($this->analyzerFactory)($this->config, $this->cache);
+                    $json = json_encode($analyzer->analyze($url), self::JSON_FLAGS);
+                    $this->cache->set($cacheKey, $json, $this->cacheTtl(json_decode($json, false, 512, JSON_THROW_ON_ERROR)));
+
+                    return $json;
+                });
 
                 return $this->success($json, false, $headers);
             } finally {
                 $this->cache->unlock($lock);
             }
         } catch (AnalyzerException $e) {
-            return $this->error($e->status, $e->getMessage(), $headers, $e->detail);
+            $extra = $e->status === 503 ? ['Retry-After' => '30'] : [];
+
+            return $this->error($e->status, $e->getMessage(), $headers + $extra, $e->detail);
         } catch (Throwable $e) {
             error_log('[sustainable-web-analyzer] ' . $e);
 
@@ -131,34 +158,97 @@ final class Api
     }
 
     /**
-     * Browsers send an Origin header on cross-origin fetches; same-origin GETs are recognised
-     * by Sec-Fetch-Site. This keeps casual direct use away – it is not a security boundary,
-     * the rate limiter is.
+     * A full bucket stops the ladder; the ones before it have already counted.
+     *
+     * @return array{0: int, 1: string} retry-after seconds (0 = allowed) and the message to send
      */
-    private function isAllowedCaller(array $server, bool $originAllowed): bool
+    private function rateLimit(string $ip, string $url): array
     {
-        if ($originAllowed || !$this->config->get('require_origin')) {
-            return true;
+        $perIp = (int) $this->config->get('rate_limit_per_ip');
+        $host = (string) parse_url($url, PHP_URL_HOST);
+
+        $retryAfter = $this->limiter->hit('ip:' . self::clientKey($ip), $perIp);
+        if ($retryAfter > 0) {
+            return [$retryAfter, "Du hast das Limit von {$perIp} Analysen pro Tag erreicht. Bitte versuche es " . self::inWords($retryAfter) . ' erneut.'];
         }
 
-        return !isset($server['HTTP_ORIGIN']) && ($server['HTTP_SEC_FETCH_SITE'] ?? null) === 'same-origin';
-    }
+        $shared = [
+            ['target:' . preg_replace('/^www\./', '', $host), (int) $this->config->get('rate_limit_per_target')],
+            ['global', (int) $this->config->get('rate_limit_global')],
+        ];
 
-    private function rateLimit(array $server): int
-    {
-        $limiter = new RateLimiter($this->config->get('cache_dir') . '/ratelimit', (int) $this->config->get('rate_limit_window'));
+        foreach ($shared as [$bucket, $limit]) {
+            $retryAfter = $this->limiter->hit($bucket, $limit);
+            if ($retryAfter > 0) {
+                return [$retryAfter, 'Der CO2 Check ist im Moment stark ausgelastet. Bitte versuche es ' . self::inWords($retryAfter) . ' erneut.'];
+            }
+        }
 
-        $retryAfter = $limiter->hit('ip:' . $this->clientKey($server), (int) $this->config->get('rate_limit_per_ip'));
-
-        return $retryAfter > 0 ? $retryAfter : $limiter->hit('global', (int) $this->config->get('rate_limit_global'));
+        return [0, ''];
     }
 
     /**
-     * Client IP (IPv6 grouped by /64, since a single client usually controls a whole /64).
+     * @return array<string, string>
      */
-    private function clientKey(array $server): string
+    private function budgetHeaders(string $ip): array
     {
-        $ip = $server['REMOTE_ADDR'] ?? '';
+        $limit = (int) $this->config->get('rate_limit_per_ip');
+
+        if ($limit <= 0) {
+            return [];
+        }
+
+        [$remaining, $resets] = $this->limiter->state('ip:' . self::clientKey($ip), $limit);
+
+        return [
+            'X-RateLimit-Limit' => (string) $limit,
+            'X-RateLimit-Remaining' => (string) $remaining,
+            'X-RateLimit-Reset' => (string) $resets,
+        ];
+    }
+
+    /**
+     * German "in 7 Stunden" for a Retry-After value.
+     */
+    private static function inWords(int $seconds): string
+    {
+        return match (true) {
+            $seconds >= 5400 => 'in ' . (int) round($seconds / 3600) . ' Stunden',
+            $seconds >= 2700 => 'in einer Stunde',
+            $seconds >= 120 => 'in ' . (int) round($seconds / 60) . ' Minuten',
+            default => 'in einer Minute',
+        };
+    }
+
+    private function isExempt(string $ip): bool
+    {
+        if ($ip === '') {
+            return false;
+        }
+
+        foreach ((array) $this->config->get('rate_limit_exempt_ips') as $entry) {
+            $entry = (string) $entry;
+            $matches = str_contains($entry, '/')
+                ? UrlGuard::inRange($ip, $entry)
+                : filter_var($entry, FILTER_VALIDATE_IP) !== false && inet_pton($entry) === inet_pton($ip);
+
+            if ($matches) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * WARNING: set client_ip_header only behind a proxy that always overwrites it. Otherwise every
+     * caller can pick their own rate-limit bucket.
+     *
+     * @param array<string, mixed> $server
+     */
+    private function clientIp(array $server): string
+    {
+        $ip = is_string($server['REMOTE_ADDR'] ?? null) ? $server['REMOTE_ADDR'] : '';
         $header = $this->config->get('client_ip_header');
 
         if (is_string($header) && is_string($server[$header] ?? null)) {
@@ -168,11 +258,19 @@ final class Api
             }
         }
 
+        return filter_var($ip, FILTER_VALIDATE_IP) !== false ? $ip : '';
+    }
+
+    /**
+     * IPv6 is grouped by /64: one client usually controls the whole block.
+     */
+    private static function clientKey(string $ip): string
+    {
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
             return bin2hex(substr((string) inet_pton($ip), 0, 8)) . '::/64';
         }
 
-        return is_string($ip) && $ip !== '' ? $ip : 'unknown';
+        return $ip !== '' ? $ip : 'unknown';
     }
 
     /**

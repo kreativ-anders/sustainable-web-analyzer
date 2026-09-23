@@ -13,7 +13,9 @@
 # Before saving, check the two marked lines: the PHP-FPM socket version and the site path.
 
 # Every uncached analysis holds a PHP-FPM worker. These limits are http-wide, so the zone names must stay
-# unique across all sites on this server. The app's own rate limit (uncached analyses per IP) still applies.
+# unique across all sites on this server. The app's own limits still apply on top: rate limits per IP and
+# per analyzed site, plus max_concurrent_analyses (6) – keep that one below this site's PHP-FPM pool size,
+# so a burst is answered with 503 instead of using up every worker.
 limit_req_zone $binary_remote_addr zone=swa_requests:10m rate=30r/m;
 limit_conn_zone $binary_remote_addr zone=swa_connections:10m;
 

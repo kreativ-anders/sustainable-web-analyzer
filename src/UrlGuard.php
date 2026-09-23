@@ -64,6 +64,10 @@ final class UrlGuard
         if ($host === null) {
             throw AnalyzerException::invalidUrl('Invalid host');
         }
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            // Never a real target, and it would make the endpoint a probe for any public IP on port 443.
+            throw AnalyzerException::blocked('IP addresses are not accepted as targets');
+        }
 
         $url = Url::normalize('https://' . $host . ($parts['path'] ?? '/') . (isset($parts['query']) ? '?' . $parts['query'] : ''));
 
@@ -137,7 +141,7 @@ final class UrlGuard
         return true;
     }
 
-    private static function inRange(string $ip, string $cidr): bool
+    public static function inRange(string $ip, string $cidr): bool
     {
         [$subnet, $bits] = explode('/', $cidr);
         $address = (string) inet_pton($ip);
